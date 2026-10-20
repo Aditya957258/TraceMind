@@ -21,7 +21,10 @@ import jakarta.validation.constraints.Size;
 
 @RestController
 @RequestMapping("/api/v1/projects")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = {
+    "http://localhost:5173",
+    "https://tracemind-frontend.onrender.com"
+})
 public class ProjectController {
 
     private final ProjectRepository projectRepository;
