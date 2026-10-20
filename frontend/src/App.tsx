@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import "./App.css";
 
@@ -17,6 +16,42 @@ type Project = {
   createdAt: string;
 };
 
+type RepositoryAnalysis = {
+  name: string;
+  fullName: string;
+  description: string | null;
+  htmlUrl: string;
+  defaultBranch: string;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  primaryLanguage: string | null;
+  languages: Record<string, number>;
+};
+
+type StructureEntry = {
+  path: string;
+  type: "blob" | "tree";
+  size: number | null;
+};
+
+type RepositoryStructure = {
+  repository: string;
+  defaultBranch: string;
+  totalEntries: number;
+  fileCount: number;
+  directoryCount: number;
+  truncated: boolean;
+  summary: {
+    topLevelFolders: string[];
+    importantFiles: string[];
+    detectedTechnologies: string[];
+    detectedAreas: string[];
+    explanation: string;
+  };
+  entries: StructureEntry[];
+};
+
 type ApiErrorResponse = {
   status?: number;
   error?: string;
@@ -25,11 +60,33 @@ type ApiErrorResponse = {
 };
 
 type FormMessageType = "success" | "error";
+type StructureFilter = "all" | "files" | "folders";
 
 function isValidGitHubRepositoryUrl(url: string): boolean {
-  return /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/?$/.test(
-    url.trim(),
-  );
+  try {
+    const parsedUrl = new URL(url.trim());
+
+    if (
+      parsedUrl.protocol !== "https:" ||
+      parsedUrl.hostname.toLowerCase() !== "github.com" ||
+      parsedUrl.username ||
+      parsedUrl.password
+    ) {
+      return false;
+    }
+
+    const segments = parsedUrl.pathname.split("/").filter(Boolean);
+
+    return (
+      segments.length === 2 &&
+      /^[A-Za-z0-9-]+$/.test(segments[0]) &&
+      /^[A-Za-z0-9_.-]+$/.test(segments[1]) &&
+      segments[1] !== "." &&
+      segments[1] !== ".."
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeRepositoryUrl(url: string): string {
@@ -51,8 +108,21 @@ function getErrorMessage(data: unknown, status: number): string {
       }
     }
 
-    if (apiError.message) return apiError.message;
-    if (apiError.error) return apiError.error;
+    if (typeof apiError.message === "string" && apiError.message.trim()) {
+      return apiError.message;
+    }
+
+    if (typeof apiError.error === "string" && apiError.error.trim()) {
+      return apiError.error;
+    }
+  }
+
+  if (status === 404) {
+    return "The requested resource was not found.";
+  }
+
+  if (status === 403 || status === 429) {
+    return "GitHub API rate limit or access restrictions may have been reached. Please try again later.";
   }
 
   return `Request failed (HTTP ${status}). Please try again.`;
@@ -62,7 +132,119 @@ async function readResponse(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
+function getGitHubOwnerAndRepo(url: string): {
+  owner: string;
+  repo: string;
+} {
+  const parsedUrl = new URL(url.trim());
+  const segments = parsedUrl.pathname.split("/").filter(Boolean);
+
+  if (segments.length !== 2 || !segments[0] || !segments[1]) {
+    throw new Error("The URL must include a repository owner and name.");
+  }
+
+  return {
+    owner: segments[0],
+    repo: segments[1],
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "Unknown size";
+  }
+
+  if (bytes >= 1_000_000) {
+    return `${(bytes / 1_000_000).toFixed(2)} MB`;
+  }
+
+  if (bytes >= 1_000) {
+    return `${(bytes / 1_000).toFixed(1)} KB`;
+  }
+
+  return `${bytes} bytes`;
+}
+
+function isRepositoryAnalysis(value: unknown): value is RepositoryAnalysis {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const data = value as Partial<RepositoryAnalysis>;
+
+  return (
+    typeof data.fullName === "string" &&
+    typeof data.name === "string" &&
+    typeof data.htmlUrl === "string" &&
+    typeof data.defaultBranch === "string" &&
+    typeof data.stars === "number" &&
+    typeof data.forks === "number" &&
+    typeof data.openIssues === "number" &&
+    !!data.languages &&
+    typeof data.languages === "object" &&
+    !Array.isArray(data.languages)
+  );
+}
+
+function isRepositoryStructure(
+  value: unknown,
+): value is RepositoryStructure {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const data = value as Partial<RepositoryStructure>;
+  const summary = data.summary;
+
+  if (
+    typeof data.repository !== "string" ||
+    typeof data.defaultBranch !== "string" ||
+    typeof data.totalEntries !== "number" ||
+    typeof data.fileCount !== "number" ||
+    typeof data.directoryCount !== "number" ||
+    typeof data.truncated !== "boolean" ||
+    !summary ||
+    typeof summary !== "object" ||
+    !Array.isArray(data.entries)
+  ) {
+    return false;
+  }
+
+  const validSummaryArrays = [
+    summary.topLevelFolders,
+    summary.importantFiles,
+    summary.detectedTechnologies,
+    summary.detectedAreas,
+  ].every(
+    (items) =>
+      Array.isArray(items) &&
+      items.every((item) => typeof item === "string"),
+  );
+
+  const validEntries = data.entries.every((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+
+    const item = entry as StructureEntry;
+
+    return (
+      typeof item.path === "string" &&
+      (item.type === "blob" || item.type === "tree") &&
+      (item.size === null ||
+        (typeof item.size === "number" && Number.isFinite(item.size)))
+    );
+  });
+
+  return (
+    validSummaryArrays &&
+    typeof summary.explanation === "string" &&
+    validEntries
+  );
+}
+
 function App() {
+  // Backend and workspace state
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthError, setHealthError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -75,9 +257,28 @@ function App() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteError, setDeleteError] = useState("");
 
+  // Add repository form
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [repositoryUrl, setRepositoryUrl] = useState("");
+
+  // GitHub metadata analysis
+  const [analysisUrl, setAnalysisUrl] = useState("");
+  const [analysis, setAnalysis] =
+    useState<RepositoryAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState("");
+
+  // Repository structure analysis
+  const [structureUrl, setStructureUrl] = useState("");
+  const [structure, setStructure] =
+    useState<RepositoryStructure | null>(null);
+  const [analyzingStructure, setAnalyzingStructure] = useState(false);
+  const [structureError, setStructureError] = useState("");
+  const [structureFilter, setStructureFilter] =
+    useState<StructureFilter>("all");
+  const [showAllStructureEntries, setShowAllStructureEntries] =
+    useState(false);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -120,10 +321,19 @@ function App() {
           throw new Error("Backend unavailable");
         }
 
-        const data: ApiHealth = await response.json();
+        const data: unknown = await readResponse(response);
+
+        if (
+          !data ||
+          typeof data !== "object" ||
+          !("service" in data) ||
+          !("status" in data)
+        ) {
+          throw new Error("Invalid health response");
+        }
 
         if (active) {
-          setHealth(data);
+          setHealth(data as ApiHealth);
           setHealthError("");
         }
       } catch {
@@ -144,6 +354,129 @@ function App() {
 
   function clearFormMessage() {
     setMessage("");
+  }
+
+  async function handleAnalyzeRepository(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+    setAnalysisError("");
+    setAnalysis(null);
+
+    const trimmedUrl = analysisUrl.trim();
+
+    if (!isValidGitHubRepositoryUrl(trimmedUrl)) {
+      setAnalysisError(
+        "Enter a valid GitHub repository URL, such as https://github.com/Aditya957258/TraceMind",
+      );
+      return;
+    }
+
+    let owner: string;
+    let repo: string;
+
+    try {
+      const parsed = getGitHubOwnerAndRepo(trimmedUrl);
+      owner = parsed.owner;
+      repo = parsed.repo;
+    } catch {
+      setAnalysisError("Please enter a valid GitHub repository URL.");
+      return;
+    }
+
+    setAnalyzing(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/analysis/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      );
+
+      const data: unknown = await readResponse(response);
+
+      if (!response.ok) {
+        throw new Error(getErrorMessage(data, response.status));
+      }
+
+      if (!isRepositoryAnalysis(data)) {
+        throw new Error(
+          "The server returned an unexpected repository analysis response.",
+        );
+      }
+
+      setAnalysis(data);
+
+      // Keep the same repository ready for structure analysis.
+      setStructureUrl(trimmedUrl);
+    } catch (err) {
+      setAnalysisError(
+        err instanceof Error
+          ? err.message
+          : "Analysis failed. Check that your backend is running.",
+      );
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function handleAnalyzeStructure(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+    setStructureError("");
+    setStructure(null);
+    setShowAllStructureEntries(false);
+    setStructureFilter("all");
+
+    const trimmedUrl = structureUrl.trim();
+
+    if (!isValidGitHubRepositoryUrl(trimmedUrl)) {
+      setStructureError(
+        "Enter a valid GitHub repository URL, such as https://github.com/Aditya957258/TraceMind",
+      );
+      return;
+    }
+
+    let owner: string;
+    let repo: string;
+
+    try {
+      const parsed = getGitHubOwnerAndRepo(trimmedUrl);
+      owner = parsed.owner;
+      repo = parsed.repo;
+    } catch {
+      setStructureError("Please enter a valid GitHub repository URL.");
+      return;
+    }
+
+    setAnalyzingStructure(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/structure/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      );
+
+      const data: unknown = await readResponse(response);
+
+      if (!response.ok) {
+        throw new Error(getErrorMessage(data, response.status));
+      }
+
+      if (!isRepositoryStructure(data)) {
+        throw new Error(
+          "The server returned an unexpected repository structure response.",
+        );
+      }
+
+      setStructure(data);
+    } catch (err) {
+      setStructureError(
+        err instanceof Error
+          ? err.message
+          : "Structure analysis failed. Check that your backend is running.",
+      );
+    } finally {
+      setAnalyzingStructure(false);
+    }
   }
 
   async function handleCreateProject(
@@ -233,7 +566,6 @@ function App() {
 
       const savedProject = data as Project;
 
-      // Keep the UI synchronized without adding the same record twice.
       setProjects((current) => {
         const exists = current.some(
           (project) =>
@@ -242,7 +574,9 @@ function App() {
               normalizeRepositoryUrl(savedProject.repositoryUrl),
         );
 
-        if (exists) return current;
+        if (exists) {
+          return current;
+        }
 
         return [savedProject, ...current];
       });
@@ -270,7 +604,9 @@ function App() {
       `Are you sure you want to delete "${project.name}"?`,
     );
 
-    if (!confirmed) return;
+    if (!confirmed) {
+      return;
+    }
 
     setDeletingId(project.id);
     setDeleteError("");
@@ -283,6 +619,7 @@ function App() {
 
       if (!response.ok) {
         const data = await readResponse(response);
+
         throw new Error(
           response.status === 404
             ? "Repository not found. Refresh the list."
@@ -306,6 +643,24 @@ function App() {
     }
   }
 
+  const filteredStructureEntries = structure
+    ? structure.entries.filter((entry) => {
+        if (structureFilter === "files") {
+          return entry.type === "blob";
+        }
+
+        if (structureFilter === "folders") {
+          return entry.type === "tree";
+        }
+
+        return true;
+      })
+    : [];
+
+  const visibleStructureEntries = showAllStructureEntries
+    ? filteredStructureEntries
+    : filteredStructureEntries.slice(0, 30);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -327,27 +682,40 @@ function App() {
         </div>
 
         <p className="nav-label">WORKSPACE</p>
+
         <nav className="sidebar-nav">
           <a className="nav-item active" href="#overview">
             <span>◫</span> Overview
           </a>
+
           <a className="nav-item" href="#projects">
             <span>⑂</span> Repositories
             <span className="nav-count">{projects.length}</span>
           </a>
+
           <a className="nav-item" href="#insights">
             <span>✳</span> AI insights
-            <span className="soon-tag">SOON</span>
+            <span className="soon-tag">BETA</span>
           </a>
         </nav>
 
         <p className="nav-label tools-label">DEVELOPER TOOLS</p>
+
         <nav className="sidebar-nav">
           <a className="nav-item" href="#projects">
             <span>⌘</span> Project explorer
           </a>
+
           <a className="nav-item" href="#add-project">
             <span>＋</span> Add repository
+          </a>
+
+          <a className="nav-item" href="#repository-analysis">
+            <span>⌕</span> Analyze repository
+          </a>
+
+          <a className="nav-item" href="#repository-structure">
+            <span>▤</span> Repository structure
           </a>
         </nav>
 
@@ -410,9 +778,11 @@ function App() {
                 <span className="eyebrow-sparkle">✳</span>
                 YOUR DEVELOPER WORKSPACE
               </div>
+
               <h1>
                 Build with clarity<span className="title-period">.</span>
               </h1>
+
               <p>
                 Understand your codebase. Discover connections.
                 <br className="desktop-break" /> Make every change with
@@ -431,9 +801,11 @@ function App() {
                 <span className="stat-icon purple-icon">⑂</span>
                 <span className="stat-caption">WORKSPACE</span>
               </div>
+
               <div className="stat-value">
                 {projects.length.toString().padStart(2, "0")}
               </div>
+
               <div className="stat-bottom">
                 <strong>Repositories</strong>
                 <span>Tracked projects</span>
@@ -445,9 +817,11 @@ function App() {
                 <span className="stat-icon green-icon">✓</span>
                 <span className="stat-caption">CONNECTIVITY</span>
               </div>
+
               <div className="stat-value stat-word">
                 {health ? "Healthy" : "Checking"}
               </div>
+
               <div className="stat-bottom">
                 <strong>Backend status</strong>
                 <span>{health?.service ?? "Spring Boot API"}</span>
@@ -459,35 +833,45 @@ function App() {
                 <span className="stat-icon blue-icon">✳</span>
                 <span className="stat-caption">INTELLIGENCE</span>
               </div>
-              <div className="stat-value stat-word">Coming soon</div>
+
+              <div className="stat-value stat-word">
+                {analysis ? "Analyzed" : "Ready"}
+              </div>
+
               <div className="stat-bottom">
-                <strong>AI code analysis</strong>
-                <span>Next development milestone</span>
+                <strong>Repository analysis</strong>
+                <span>
+                  {analysis ? analysis.fullName : "GitHub metadata"}
+                </span>
               </div>
             </article>
           </section>
 
           <section className="insights-panel" id="insights">
             <div className="insights-glow" />
+
             <div className="insights-content">
               <div className="insights-label">
-                <span>✳</span> INTRODUCING TRACEMIND INTELLIGENCE
+                <span>✳</span> TRACEMIND INTELLIGENCE
               </div>
+
               <h2>Your code has a story.</h2>
+
               <p>
-                We're building repository intelligence to help you understand
-                project structure, dependencies, and the potential impact of
-                changes.
+                Explore public repository metadata, programming language
+                statistics, files, folders, and detected technologies. These
+                features establish a foundation for deeper code understanding.
               </p>
+
               <div className="insights-features">
                 <span>
-                  <i>✓</i> Repository understanding
+                  <i>✓</i> Repository metadata
                 </span>
                 <span>
-                  <i>✓</i> Dependency mapping
+                  <i>✓</i> Language statistics
                 </span>
                 <span>
-                  <i>✓</i> Change impact analysis
+                  <i>✓</i> File and folder analysis
                 </span>
               </div>
             </div>
@@ -501,9 +885,474 @@ function App() {
               <span className="orbit-node node-two">⑂</span>
               <span className="orbit-node node-three">✳</span>
             </div>
-            <span className="preview-badge">IN DEVELOPMENT</span>
+
+            <span className="preview-badge">REPOSITORY INTELLIGENCE</span>
           </section>
 
+          {/* GitHub metadata analysis */}
+          <section className="analysis-section" id="repository-analysis">
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow">GITHUB INTELLIGENCE</div>
+                <h2>Analyze a repository</h2>
+                <p>
+                  Inspect public GitHub repository metadata and programming
+                  language statistics.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="repository-form analysis-form"
+              onSubmit={handleAnalyzeRepository}
+              noValidate
+            >
+              <label htmlFor="analysis-url">
+                GitHub repository URL <span>*</span>
+              </label>
+
+              <input
+                id="analysis-url"
+                type="url"
+                inputMode="url"
+                value={analysisUrl}
+                onChange={(event) => {
+                  setAnalysisUrl(event.target.value);
+                  setAnalysisError("");
+                }}
+                placeholder="https://github.com/Aditya957258/TraceMind"
+                maxLength={2048}
+                autoComplete="url"
+                spellCheck={false}
+                required
+              />
+
+              <button
+                className="primary-button form-submit"
+                type="submit"
+                disabled={analyzing}
+              >
+                {analyzing ? "Analyzing repository…" : "Analyze repository"}
+                {!analyzing && <span>→</span>}
+              </button>
+
+              {analysisError && (
+                <p className="form-message error-message" role="alert">
+                  {analysisError}
+                </p>
+              )}
+            </form>
+
+            {analysis && (
+              <article className="analysis-result">
+                <div className="analysis-result-header">
+                  <div>
+                    <div className="eyebrow">ANALYSIS RESULT</div>
+                    <h3>{analysis.fullName}</h3>
+                    <p>
+                      {analysis.description ||
+                        "This repository has no description."}
+                    </p>
+                  </div>
+
+                  <a
+                    className="secondary-button"
+                    href={analysis.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open on GitHub ↗
+                  </a>
+                </div>
+
+                <div className="analysis-stats-grid">
+                  <div className="analysis-stat">
+                    <span>★</span>
+                    <small>Stars</small>
+                    <strong>{analysis.stars.toLocaleString()}</strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>⑂</span>
+                    <small>Forks</small>
+                    <strong>{analysis.forks.toLocaleString()}</strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>◎</span>
+                    <small>Open issues</small>
+                    <strong>{analysis.openIssues.toLocaleString()}</strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>{"</>"}</span>
+                    <small>Primary language</small>
+                    <strong>
+                      {analysis.primaryLanguage || "Not specified"}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="analysis-details">
+                  <p>
+                    <strong>Default branch:</strong>{" "}
+                    {analysis.defaultBranch || "Not available"}
+                  </p>
+                </div>
+
+                <div className="language-section">
+                  <h4>Language breakdown</h4>
+
+                  {Object.keys(analysis.languages).length === 0 ? (
+                    <p>
+                      No language statistics are available for this repository.
+                    </p>
+                  ) : (
+                    (() => {
+                      const entries = Object.entries(analysis.languages)
+                        .filter(
+                          ([, bytes]) =>
+                            typeof bytes === "number" &&
+                            Number.isFinite(bytes) &&
+                            bytes >= 0,
+                        )
+                        .sort((a, b) => b[1] - a[1]);
+
+                      const totalBytes = entries.reduce(
+                        (sum, [, bytes]) => sum + bytes,
+                        0,
+                      );
+
+                      if (entries.length === 0 || totalBytes === 0) {
+                        return (
+                          <p>
+                            No measurable language statistics are available.
+                          </p>
+                        );
+                      }
+
+                      return (
+                        <>
+                          <div
+                            className="language-bar"
+                            role="img"
+                            aria-label="Programming language distribution"
+                          >
+                            {entries.map(([language, bytes]) => (
+                              <span
+                                key={language}
+                                className="language-bar-segment"
+                                title={`${language}: ${(
+                                  (bytes / totalBytes) *
+                                  100
+                                ).toFixed(1)}%`}
+                                style={{
+                                  width: `${(bytes / totalBytes) * 100}%`,
+                                }}
+                              />
+                            ))}
+                          </div>
+
+                          <div className="language-list">
+                            {entries.map(([language, bytes]) => (
+                              <div className="language-item" key={language}>
+                                <span className="language-name">
+                                  <span className="language-dot" />
+                                  {language}
+                                </span>
+
+                                <span>
+                                  {(
+                                    (bytes / totalBytes) *
+                                    100
+                                  ).toFixed(1)}
+                                  %
+                                </span>
+
+                                <small>{formatBytes(bytes)}</small>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    })()
+                  )}
+                </div>
+              </article>
+            )}
+          </section>
+
+          {/* Repository structure analysis */}
+          <section
+            className="analysis-section"
+            id="repository-structure"
+          >
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow">CODEBASE EXPLORER</div>
+                <h2>Repository structure</h2>
+                <p>
+                  Explore the repository tree, important files, top-level
+                  folders, and technologies detected by TraceMind.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="repository-form analysis-form"
+              onSubmit={handleAnalyzeStructure}
+              noValidate
+            >
+              <label htmlFor="structure-url">
+                GitHub repository URL <span>*</span>
+              </label>
+
+              <input
+                id="structure-url"
+                type="url"
+                inputMode="url"
+                value={structureUrl}
+                onChange={(event) => {
+                  setStructureUrl(event.target.value);
+                  setStructureError("");
+                }}
+                placeholder="https://github.com/Aditya957258/TraceMind"
+                maxLength={2048}
+                autoComplete="url"
+                spellCheck={false}
+                required
+              />
+
+              <button
+                className="primary-button form-submit"
+                type="submit"
+                disabled={analyzingStructure}
+              >
+                {analyzingStructure
+                  ? "Inspecting repository…"
+                  : "Analyze structure"}
+                {!analyzingStructure && <span>→</span>}
+              </button>
+
+              {analysisUrl.trim() && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setStructureUrl(analysisUrl);
+                    setStructureError("");
+                  }}
+                >
+                  Use metadata analysis URL
+                </button>
+              )}
+
+              {structureError && (
+                <p className="form-message error-message" role="alert">
+                  {structureError}
+                </p>
+              )}
+            </form>
+
+            {structure && (
+              <article className="analysis-result">
+                <div className="analysis-result-header">
+                  <div>
+                    <div className="eyebrow">STRUCTURE ANALYSIS RESULT</div>
+                    <h3>{structure.repository}</h3>
+                    <p>
+                      Default branch:{" "}
+                      <strong>{structure.defaultBranch || "Not available"}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="analysis-stats-grid">
+                  <div className="analysis-stat">
+                    <span>▤</span>
+                    <small>Total entries</small>
+                    <strong>
+                      {structure.totalEntries.toLocaleString()}
+                    </strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>▧</span>
+                    <small>Files</small>
+                    <strong>{structure.fileCount.toLocaleString()}</strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>▣</span>
+                    <small>Directories</small>
+                    <strong>
+                      {structure.directoryCount.toLocaleString()}
+                    </strong>
+                  </div>
+
+                  <div className="analysis-stat">
+                    <span>⌘</span>
+                    <small>Branch</small>
+                    <strong>{structure.defaultBranch || "Unknown"}</strong>
+                  </div>
+                </div>
+
+                {structure.truncated && (
+                  <div className="notice-error" role="status">
+                    The repository tree was truncated by the GitHub API.
+                    The displayed entries may not include every file or folder.
+                  </div>
+                )}
+
+                <div className="language-section">
+                  <h4>Repository summary</h4>
+                  <p>
+                    {structure.summary.explanation ||
+                      "No additional repository explanation is available."}
+                  </p>
+                </div>
+
+                <div className="language-section">
+                  <h4>Top-level folders</h4>
+
+                  {structure.summary.topLevelFolders.length > 0 ? (
+                    <div className="insights-features">
+                      {structure.summary.topLevelFolders.map((folder) => (
+                        <span key={folder}>
+                          <i>▣</i> {folder}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>No top-level folders were detected.</p>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Detected technologies</h4>
+
+                  {structure.summary.detectedTechnologies.length > 0 ? (
+                    <div className="insights-features">
+                      {structure.summary.detectedTechnologies.map(
+                        (technology) => (
+                          <span key={technology}>
+                            <i>✓</i> {technology}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                  ) : (
+                    <p>No technologies were detected.</p>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Detected project areas</h4>
+
+                  {structure.summary.detectedAreas.length > 0 ? (
+                    <div className="insights-features">
+                      {structure.summary.detectedAreas.map((area) => (
+                        <span key={area}>
+                          <i>✓</i> {area}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>No project areas were detected.</p>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Important files</h4>
+
+                  {structure.summary.importantFiles.length > 0 ? (
+                    <ul className="structure-important-files">
+                      {structure.summary.importantFiles.map((file) => (
+                        <li key={file}>
+                          <code>{file}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No important files were identified.</p>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>File and folder explorer</h4>
+
+                  <div className="structure-toolbar">
+                    <label htmlFor="structure-filter">Show</label>
+
+                    <select
+                      id="structure-filter"
+                      value={structureFilter}
+                      onChange={(event) =>
+                        setStructureFilter(
+                          event.target.value as StructureFilter,
+                        )
+                      }
+                    >
+                      <option value="all">All entries</option>
+                      <option value="files">Files only</option>
+                      <option value="folders">Folders only</option>
+                    </select>
+
+                    <span className="structure-entry-count">
+                      {filteredStructureEntries.length.toLocaleString()} entries
+                    </span>
+                  </div>
+
+                  {visibleStructureEntries.length === 0 ? (
+                    <p>No entries match this filter.</p>
+                  ) : (
+                    <div className="structure-tree">
+                      {visibleStructureEntries.map((entry) => (
+                        <div className="structure-entry" key={entry.path}>
+                          <span
+                            className="structure-entry-icon"
+                            aria-hidden="true"
+                          >
+                            {entry.type === "tree" ? "📁" : "📄"}
+                          </span>
+
+                          <code className="structure-entry-path">
+                            {entry.path}
+                          </code>
+
+                          <span className="structure-entry-type">
+                            {entry.type === "tree" ? "Folder" : "File"}
+                          </span>
+
+                          <small className="structure-entry-size">
+                            {entry.size === null
+                              ? "—"
+                              : formatBytes(entry.size)}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {filteredStructureEntries.length > 30 && (
+                    <button
+                      type="button"
+                      className="secondary-button structure-toggle"
+                      onClick={() =>
+                        setShowAllStructureEntries((current) => !current)
+                      }
+                    >
+                      {showAllStructureEntries
+                        ? "Show fewer entries"
+                        : `Show all ${filteredStructureEntries.length} entries`}
+                    </button>
+                  )}
+                </div>
+              </article>
+            )}
+          </section>
+
+          {/* Workspace repositories */}
           <section className="repositories-section" id="projects">
             <div className="section-heading">
               <div>
@@ -559,13 +1408,16 @@ function App() {
                   <article className="repository-card" key={project.id}>
                     <div className="repository-card-header">
                       <div className="repository-symbol">{"</>"}</div>
+
                       <span className="repository-status">
                         <span className="status-dot is-online" /> CONNECTED
                       </span>
+
                       <span className="repository-menu">···</span>
                     </div>
 
                     <h3>{project.name}</h3>
+
                     <p className="repository-description">
                       {project.description ||
                         "No project description added yet."}
@@ -576,7 +1428,10 @@ function App() {
                     <div className="repository-meta">
                       <span>PROJECT #{project.id}</span>
                       <span>
-                        {new Date(project.createdAt).toLocaleDateString()}
+                        {project.createdAt &&
+                        !Number.isNaN(Date.parse(project.createdAt))
+                          ? new Date(project.createdAt).toLocaleDateString()
+                          : "Date unavailable"}
                       </span>
                     </div>
 
@@ -606,14 +1461,18 @@ function App() {
             )}
           </section>
 
+          {/* Add repository */}
           <section className="add-section" id="add-project">
             <div className="add-section-intro">
               <div className="eyebrow">EXPAND YOUR WORKSPACE</div>
+
               <h2>Bring a project in.</h2>
+
               <p>
                 Register a repository to keep your projects organized in
                 TraceMind.
               </p>
+
               <div className="form-note">
                 <span>⌁</span>
                 Your project details are stored in your PostgreSQL database.
@@ -636,6 +1495,7 @@ function App() {
               <label htmlFor="project-name">
                 Project name <span>*</span>
               </label>
+
               <input
                 id="project-name"
                 type="text"
@@ -653,9 +1513,10 @@ function App() {
               <label htmlFor="repository-url">
                 GitHub repository URL <span>*</span>
               </label>
+
               <input
                 id="repository-url"
-                type="text"
+                type="url"
                 inputMode="url"
                 value={repositoryUrl}
                 onChange={(event) => {
@@ -670,6 +1531,7 @@ function App() {
               />
 
               <label htmlFor="project-description">Description</label>
+
               <textarea
                 id="project-description"
                 value={description}
@@ -711,6 +1573,7 @@ function App() {
               TraceMind <span className="footer-dot">·</span> Built for safer
               software development
             </span>
+
             <span className="footer-version">
               LOCAL DEVELOPMENT <span>•</span> V1.0
             </span>
