@@ -1,0 +1,25 @@
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/target/
+
+# Build output
+frontend/dist/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDE settings
+.vscode/
+.idea/
+
+# macOS files
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
