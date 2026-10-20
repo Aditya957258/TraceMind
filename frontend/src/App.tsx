@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import "./App.css";
 
-const API_BASE = "http://localhost:8080/api/v1";
+const API_BASE = "https://tracemind-api-aditya-5ivx.onrender.com/api/v1";
 
 type ApiHealth = {
   service: string;
