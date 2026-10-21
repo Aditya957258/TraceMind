@@ -224,10 +224,16 @@ public class CodeAnalysisService {
             }
 
             if (SECRET_PATTERN.matcher(line).find()) {
-                addFinding(findings, path, i + 1, "HIGH",
+                boolean testSource = isTestPath(path);
+                addFinding(findings, path, i + 1,
+                        testSource ? "MEDIUM" : "HIGH",
                         "Possible hardcoded credential",
-                        "A value resembling a credential appears directly in source code. This may be a false positive.",
-                        "Verify the value and move genuine secrets to environment variables or a secret manager.");
+                        testSource
+                                ? "A credential-like value appears in a test source file. It may be a fixture, but verify it is not a real secret."
+                                : "A value resembling a credential appears directly in source code. This may be a false positive.",
+                        testSource
+                                ? "Use an obviously synthetic placeholder and ensure no real credentials are committed."
+                                : "Verify the value and move genuine secrets to environment variables or a secret manager.");
             }
 
             if (lower.matches(".*\\beval\\s*\\(.*")) {
@@ -273,22 +279,33 @@ public class CodeAnalysisService {
         finding.put("recommendation", recommendation);
         findings.add(finding);
     }
+    private boolean isTestPath(String path) {
+    String normalized = path.replace('\\', '/').toLowerCase(Locale.ROOT);
 
-    private boolean isSupported(String path) {
-        String lower = path.toLowerCase(Locale.ROOT);
-        return SUPPORTED_EXTENSIONS.stream().anyMatch(lower::endsWith);
-    }
+    return normalized.startsWith("test/")
+            || normalized.startsWith("tests/")
+            || normalized.contains("/test/")
+            || normalized.contains("/tests/");
+}
 
-    private boolean isExcludedPath(String path) {
-        String lower = "/" + path.toLowerCase(Locale.ROOT) + "/";
-        return lower.contains("/node_modules/")
-                || lower.contains("/vendor/")
-                || lower.contains("/.git/")
-                || lower.contains("/build/")
-                || lower.contains("/dist/")
-                || lower.contains("/target/")
-                || lower.contains("/.next/");
-    }
+private boolean isSupported(String path) {
+    String lower = path.toLowerCase(Locale.ROOT);
+
+    return SUPPORTED_EXTENSIONS.stream()
+            .anyMatch(extension -> lower.endsWith(extension));
+}
+
+private boolean isExcludedPath(String path) {
+    String lower = "/" + path.toLowerCase(Locale.ROOT) + "/";
+
+    return lower.contains("/node_modules/")
+            || lower.contains("/vendor/")
+            || lower.contains("/.git/")
+            || lower.contains("/build/")
+            || lower.contains("/dist/")
+            || lower.contains("/target/")
+            || lower.contains("/.next/");
+}
 
     private void validateRepositoryName(String value, String label) {
         if (value == null

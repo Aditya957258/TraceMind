@@ -83,4 +83,24 @@ class CodeAnalysisServiceTest {
 
         assertTrue(findings.isEmpty());
     }
+
+    @Test
+    void reportsCredentialLikeValuesInTestsAsMediumSeverity() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile(
+                "backend/src/test/java/ExampleTest.java",
+                "String api_key = \"abcdefgh123456\";",
+                findings
+        );
+
+        assertEquals(1, findings.size());
+        assertEquals("Possible hardcoded credential", findings.get(0).get("rule"));
+        assertEquals("MEDIUM", findings.get(0).get("severity"));
+        assertTrue(
+                String.valueOf(findings.get(0).get("explanation"))
+                        .contains("test source file")
+        );
+    }
+
 }
