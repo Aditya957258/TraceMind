@@ -619,4 +619,25 @@ class CodeAnalysisServiceTest {
         assertEquals("MEDIUM", findings.get(2).get("severity"));
     }
 
+
+    @Test
+    void ignoresSecurityPatternsInsideLineCommentsButKeepsTodoFinding() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile(
+                "src/App.java",
+                """
+                // TODO: review this implementation
+                // eval(userInput);
+                // http.authorizeHttpRequests().permitAll();
+                int total = 10;
+                """,
+                findings
+        );
+
+        assertEquals(1, findings.size());
+        assertEquals("TODO/FIXME marker", findings.get(0).get("rule"));
+        assertEquals(1, findings.get(0).get("line"));
+    }
+
 }

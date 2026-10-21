@@ -217,6 +217,8 @@ public class CodeAnalysisService {
             String line = lines[i];
             String trimmed = line.trim();
             String lower = trimmed.toLowerCase(Locale.ROOT);
+            String codeLine = stripLineComment(line, path);
+            String codeLower = codeLine.toLowerCase(Locale.ROOT);
 
             if (trimmed.isEmpty()) {
                 continue;
@@ -229,16 +231,16 @@ public class CodeAnalysisService {
                         "Confirm whether the task is still outstanding.");
             }
 
-            if (line.contains("System.out.println(")
-                    || line.contains("console.log(")
-                    || line.contains("printStackTrace()")) {
+            if (codeLine.contains("System.out.println(")
+                    || codeLine.contains("console.log(")
+                    || codeLine.contains("printStackTrace()")) {
                 addFinding(findings, path, i + 1, "LOW",
                         "Debug output",
                         "Debug output may expose internal details or clutter production logs.",
                         "Use the application's logging framework where appropriate.");
             }
 
-            if (SECRET_PATTERN.matcher(line).find()) {
+            if (SECRET_PATTERN.matcher(codeLine).find()) {
                 boolean testSource = isTestPath(path);
                 addFinding(findings, path, i + 1,
                         testSource ? "MEDIUM" : "HIGH",
@@ -251,29 +253,73 @@ public class CodeAnalysisService {
                                 : "Verify the value and move genuine secrets to environment variables or a secret manager.");
             }
 
-            if (lower.matches(".*\\beval\\s*\\(.*")) {
+            if (codeLower.matches(".*\\beval\\s*\\(.*")) {
                 addFinding(findings, path, i + 1, "HIGH",
                         "Dynamic code evaluation",
                         "Evaluating dynamic input as code can create an injection risk.",
                         "Avoid eval where possible and validate untrusted input.");
             }
 
-            if (lower.contains("allowall")
-                    || lower.contains("permitall")) {
+            if (codeLower.contains("allowall")
+                    || codeLower.contains("permitall")) {
                 addFinding(findings, path, i + 1, "MEDIUM",
                         "Broad access configuration",
                         "This line may indicate permissive access rules; context determines whether it is risky.",
                         "Review authentication and authorization requirements.");
             }
 
-            if (lower.matches(".*catch\\s*\\([^)]*\\)\\s*\\{\\s*}.*")
-                    || lower.matches(".*except\\s*:\\s*pass.*")) {
+            if (codeLower.matches(".*catch\\s*\\([^)]*\\)\\s*\\{\\s*}.*")
+                    || codeLower.matches(".*except\\s*:\\s*pass.*")) {
                 addFinding(findings, path, i + 1, "MEDIUM",
                         "Potentially empty exception handler",
                         "An exception may be swallowed without recovery or useful logging.",
                         "Handle the error explicitly or log it when appropriate.");
             }
         }
+    }
+
+    private String stripLineComment(String line, String path) {
+        String lowerPath = path.toLowerCase(Locale.ROOT);
+        boolean hashComments = lowerPath.endsWith(".py")
+                || lowerPath.endsWith(".rb");
+
+        char quote = 0;
+        boolean escaped = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+
+            if (quote != 0) {
+                if (c == '\\') {
+                    escaped = true;
+                } else if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+
+            if (c == '"' || c == '\'' || c == '`') {
+                quote = c;
+                continue;
+            }
+
+            if (hashComments && c == '#') {
+                return line.substring(0, i);
+            }
+
+            if (!hashComments && c == '/'
+                    && i + 1 < line.length()
+                    && line.charAt(i + 1) == '/') {
+                return line.substring(0, i);
+            }
+        }
+
+        return line;
     }
 
     private void addFinding(
