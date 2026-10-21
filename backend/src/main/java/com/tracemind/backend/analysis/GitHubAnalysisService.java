@@ -15,13 +15,18 @@ public class GitHubAnalysisService {
 
     private final RestClient restClient;
 
-    public GitHubAnalysisService() {
-        this.restClient = RestClient.builder()
+        public GitHubAnalysisService() {
+               this(RestClient.builder());
+    }
+
+    GitHubAnalysisService(RestClient.Builder builder) {
+        this.restClient = builder
                 .baseUrl("https://api.github.com")
                 .defaultHeader("Accept", "application/vnd.github+json")
                 .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
                 .build();
     }
+
 
     public Map<String, Object> analyzeRepository(String owner, String repo) {
         try {
