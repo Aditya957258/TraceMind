@@ -61,6 +61,27 @@ type RepositoryStructure = {
   entries: StructureEntry[];
 };
 
+type RiskFinding = {
+  file: string;
+  line: number;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  rule: string;
+  explanation: string;
+  recommendation: string;
+};
+
+type CodeAnalysisResult = {
+  repository: string;
+  defaultBranch: string;
+  analyzedFileCount: number;
+  skippedFileCount: number;
+  truncated: boolean;
+  findingCount: number;
+  findings: RiskFinding[];
+  analyzedFiles: string[];
+  note: string;
+};
+
 type ApiErrorResponse = {
   status?: number;
   error?: string;
@@ -210,6 +231,40 @@ function isRepositoryAnalysis(
       value.primaryLanguage === null) &&
     isRecord(value.languages) &&
     Object.values(value.languages).every(isNonNegativeNumber)
+  );
+}
+
+function isRiskFinding(value: unknown): value is RiskFinding {
+  return (
+    isRecord(value) &&
+    typeof value.file === "string" &&
+    typeof value.line === "number" &&
+    Number.isInteger(value.line) &&
+    value.line >= 1 &&
+    (value.severity === "HIGH" ||
+      value.severity === "MEDIUM" ||
+      value.severity === "LOW") &&
+    typeof value.rule === "string" &&
+    typeof value.explanation === "string" &&
+    typeof value.recommendation === "string"
+  );
+}
+
+function isCodeAnalysisResult(
+  value: unknown,
+): value is CodeAnalysisResult {
+  return (
+    isRecord(value) &&
+    typeof value.repository === "string" &&
+    typeof value.defaultBranch === "string" &&
+    isNonNegativeNumber(value.analyzedFileCount) &&
+    isNonNegativeNumber(value.skippedFileCount) &&
+    typeof value.truncated === "boolean" &&
+    isNonNegativeNumber(value.findingCount) &&
+    Array.isArray(value.findings) &&
+    value.findings.every(isRiskFinding) &&
+    isStringArray(value.analyzedFiles) &&
+    typeof value.note === "string"
   );
 }
 
@@ -460,6 +515,11 @@ function App() {
       ),
     );
 
+  const [riskAnalysis, setRiskAnalysis] =
+    useState<CodeAnalysisResult | null>(null);
+  const [riskAnalysisLoading, setRiskAnalysisLoading] = useState(false);
+  const [riskAnalysisError, setRiskAnalysisError] = useState("");
+
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
@@ -622,6 +682,53 @@ function App() {
       );
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  async function handleRunRiskAnalysis() {
+    setRiskAnalysisError("");
+
+    const url = analysisUrl.trim();
+
+    if (!isValidGitHubRepositoryUrl(url)) {
+      setRiskAnalysisError(
+        "Enter a valid public GitHub repository URL in the repository analysis form first.",
+      );
+      return;
+    }
+
+    let owner: string;
+    let repo: string;
+
+    try {
+      ({ owner, repo } = getGitHubOwnerAndRepo(url));
+    } catch {
+      setRiskAnalysisError("Invalid GitHub repository URL.");
+      return;
+    }
+
+    setRiskAnalysisLoading(true);
+
+    try {
+      const data = await apiRequest(
+        `/code-analysis/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      );
+
+      if (!isCodeAnalysisResult(data)) {
+        throw new Error(
+          "The backend returned an unexpected risk analysis response.",
+        );
+      }
+
+      setRiskAnalysis(data);
+    } catch (err) {
+      setRiskAnalysisError(
+        err instanceof Error
+          ? err.message
+          : "Risk analysis failed. Please try again.",
+      );
+    } finally {
+      setRiskAnalysisLoading(false);
     }
   }
 
@@ -1052,6 +1159,126 @@ function App() {
             <span className="preview-badge">
               REPOSITORY INTELLIGENCE
             </span>
+          </section>
+
+          <section
+            className="risk-analysis-section"
+            aria-labelledby="risk-analysis-title"
+          >
+            <div className="risk-analysis-heading">
+              <div>
+                <div className="eyebrow">STATIC CODE REVIEW</div>
+                <h2 id="risk-analysis-title">Risk insights</h2>
+                <p>
+                  Scan supported source files for suspicious patterns and
+                  review evidence-backed recommendations.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleRunRiskAnalysis()}
+                disabled={riskAnalysisLoading || !analysisUrl.trim()}
+              >
+                {riskAnalysisLoading
+                  ? "Scanning source files…"
+                  : "Run risk analysis →"}
+              </button>
+            </div>
+
+            {!analysisUrl.trim() && (
+              <p className="risk-analysis-hint">
+                Enter a public GitHub repository URL in “Analyze a
+                repository” below, then return here to run the scan.
+              </p>
+            )}
+
+            {riskAnalysisError && (
+              <div className="notice-error" role="alert">
+                {riskAnalysisError}
+              </div>
+            )}
+
+            {riskAnalysis && (
+              <>
+                <div className="risk-summary-grid">
+                  <div className="risk-summary-card">
+                    <span>Files scanned</span>
+                    <strong>{riskAnalysis.analyzedFileCount}</strong>
+                  </div>
+                  <div className="risk-summary-card">
+                    <span>Total findings</span>
+                    <strong>{riskAnalysis.findingCount}</strong>
+                  </div>
+                  <div className="risk-summary-card">
+                    <span>High severity</span>
+                    <strong>
+                      {riskAnalysis.findings.filter(
+                        (finding) => finding.severity === "HIGH",
+                      ).length}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="risk-result-meta">
+                  <span>{riskAnalysis.repository}</span>
+                  <span>Branch: {riskAnalysis.defaultBranch}</span>
+                </div>
+
+                {(riskAnalysis.skippedFileCount > 0 ||
+                  riskAnalysis.truncated) && (
+                  <p className="risk-analysis-hint">
+                    Coverage note: some files may not have been scanned.
+                    Skipped files: {riskAnalysis.skippedFileCount}.
+                    {riskAnalysis.truncated
+                      ? " GitHub reported a truncated repository tree."
+                      : ""}
+                  </p>
+                )}
+
+                {riskAnalysis.findings.length === 0 ? (
+                  <div className="empty-panel">
+                    <h3>No heuristic findings detected</h3>
+                    <p>
+                      This scan did not match any of its current rules.
+                      It does not prove the repository is vulnerability-free.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="risk-findings-list">
+                    {riskAnalysis.findings.map((finding, index) => (
+                      <article
+                        className="risk-finding-card"
+                        key={`${finding.file}:${finding.line}:${finding.rule}:${index}`}
+                      >
+                        <div className="risk-finding-top">
+                          <span
+                            className={`risk-severity severity-${finding.severity.toLowerCase()}`}
+                          >
+                            {finding.severity}
+                          </span>
+                          <span className="risk-finding-location">
+                            {finding.file}:{finding.line}
+                          </span>
+                        </div>
+                        <h3>{finding.rule}</h3>
+                        <p>{finding.explanation}</p>
+                        <div className="risk-recommendation">
+                          <strong>Recommended action</strong>
+                          <p>{finding.recommendation}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
+                <p className="risk-analysis-disclaimer">
+                  {riskAnalysis.note} Findings are heuristic signals,
+                  not confirmed vulnerabilities. Review the source context
+                  before taking action.
+                </p>
+              </>
+            )}
           </section>
 
           <section className="analysis-section" id="repository-analysis">
