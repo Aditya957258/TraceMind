@@ -1,6 +1,9 @@
 package com.tracemind.backend.analysis;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.web.server.ResponseStatusException;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -103,4 +106,52 @@ class CodeAnalysisServiceTest {
         );
     }
 
+
+    @Test
+    void invalidRepositoryOwnerReturnsBadRequest() {
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> service.analyze("../invalid", "TraceMind")
+        );
+
+        assertEquals(400, exception.getStatusCode().value());
+    }
+
+    @Test
+    void invalidRepositoryNameReturnsBadRequest() {
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> service.analyze("Aditya957258", "invalid/repo")
+        );
+
+        assertEquals(400, exception.getStatusCode().value());
+    }
+
+    @Test
+    void rejectsDotAndDotDotRepositoryNames() {
+        for (String invalidName : List.of(".", "..")) {
+            ResponseStatusException exception = assertThrows(
+                    ResponseStatusException.class,
+                    () -> service.analyze("Aditya957258", invalidName)
+            );
+
+            assertEquals(400, exception.getStatusCode().value());
+        }
+    }
+
+    @Test
+    void detectsCaseInsensitiveMarkersAndPythonEmptyHandlers() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile(
+                "src/example.py",
+                """
+                # FIXME: REVIEW THIS
+                except: pass
+                """,
+                findings
+        );
+
+        assertEquals(2, findings.size());
+    }
 }
