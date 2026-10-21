@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -35,8 +36,15 @@ public class CodeAnalysisService {
     );
 
     private final RestClient github;
+    private final RiskScoringService riskScoringService;
 
     public CodeAnalysisService() {
+        this(new RiskScoringService());
+    }
+
+    @Autowired
+    public CodeAnalysisService(RiskScoringService riskScoringService) {
+        this.riskScoringService = riskScoringService;
         this.github = RestClient.builder()
                 .baseUrl("https://api.github.com")
                 .defaultHeader("Accept", "application/vnd.github+json")
@@ -146,6 +154,7 @@ public class CodeAnalysisService {
             response.put("truncated", Boolean.TRUE.equals(
                     treeResponse.get("truncated")));
             response.put("findingCount", findings.size());
+            response.putAll(riskScoringService.calculate(findings));
             response.put("findings", findings);
             response.put("analyzedFiles", analyzedFiles);
             response.put(
