@@ -80,4 +80,48 @@ class RiskScoringServiceTest {
         }
         return findings;
     }
+
+    @Test
+    void classifiesRiskAtExactScoreBoundaries() {
+        assertEquals("LOW", service.calculate(
+                combine(repeated("HIGH", 1),
+                        repeated("MEDIUM", 1),
+                        repeated("LOW", 2))
+        ).get("riskLevel")); // 19
+
+        assertEquals("MODERATE", service.calculate(
+                repeated("MEDIUM", 4)
+        ).get("riskLevel")); // 20
+
+        assertEquals("MODERATE", service.calculate(
+                combine(repeated("HIGH", 4),
+                        repeated("MEDIUM", 1),
+                        repeated("LOW", 2))
+        ).get("riskLevel")); // 49
+
+        assertEquals("HIGH", service.calculate(
+                repeated("HIGH", 5)
+        ).get("riskLevel")); // 50
+
+        assertEquals("HIGH", service.calculate(
+                combine(repeated("HIGH", 7),
+                        repeated("LOW", 2))
+        ).get("riskLevel")); // 74
+
+        assertEquals("CRITICAL", service.calculate(
+                combine(repeated("HIGH", 7),
+                        repeated("MEDIUM", 1))
+        ).get("riskLevel")); // 75
+    }
+
+    @SafeVarargs
+    private final List<Map<String, Object>> combine(
+            List<Map<String, Object>>... groups) {
+        List<Map<String, Object>> findings = new ArrayList<>();
+        for (List<Map<String, Object>> group : groups) {
+            findings.addAll(group);
+        }
+        return findings;
+    }
+
 }
