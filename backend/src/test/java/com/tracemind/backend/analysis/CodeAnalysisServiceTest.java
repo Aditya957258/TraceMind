@@ -42,6 +42,36 @@ class CodeAnalysisServiceTest {
     }
 
     @Test
+    void detectsDynamicEvaluationPermissiveAccessAndEmptyExceptionHandler() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        String source = """
+                eval(userInput);
+                http.authorizeHttpRequests().permitAll();
+                try { riskyOperation(); } catch (Exception ex) {}
+                """;
+
+        service.scanFile("src/App.java", source, findings);
+
+        assertEquals(3, findings.size());
+
+        assertEquals("Dynamic code evaluation", findings.get(0).get("rule"));
+        assertEquals("HIGH", findings.get(0).get("severity"));
+        assertEquals(1, findings.get(0).get("line"));
+
+        assertEquals("Broad access configuration", findings.get(1).get("rule"));
+        assertEquals("MEDIUM", findings.get(1).get("severity"));
+        assertEquals(2, findings.get(1).get("line"));
+
+        assertEquals(
+                "Potentially empty exception handler",
+                findings.get(2).get("rule")
+        );
+        assertEquals("MEDIUM", findings.get(2).get("severity"));
+        assertEquals(3, findings.get(2).get("line"));
+    }
+
+    @Test
     void cleanSourceProducesNoFindings() {
         List<Map<String, Object>> findings = new ArrayList<>();
 
