@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+} from "react";
 import "./App.css";
 
-const API_BASE = "https://tracemind-api-aditya-5ivx.onrender.com/api/v1";
+const API_BASE =
+  "https://tracemind-api-aditya-5ivx.onrender.com/api/v1";
+
+const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 type ApiHealth = {
   service: string;
@@ -62,42 +71,231 @@ type ApiErrorResponse = {
 type FormMessageType = "success" | "error";
 type StructureFilter = "all" | "files" | "folders";
 
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+function isNonNegativeNumber(
+  value: unknown,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0
+  );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => typeof item === "string")
+  );
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
 function isValidGitHubRepositoryUrl(url: string): boolean {
   try {
-    const parsedUrl = new URL(url.trim());
+    const parsed = new URL(url.trim());
 
     if (
-      parsedUrl.protocol !== "https:" ||
-      parsedUrl.hostname.toLowerCase() !== "github.com" ||
-      parsedUrl.username ||
-      parsedUrl.password
+      parsed.protocol !== "https:" ||
+      parsed.hostname.toLowerCase() !== "github.com" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.search ||
+      parsed.hash
     ) {
       return false;
     }
 
-    const segments = parsedUrl.pathname.split("/").filter(Boolean);
+    const segments = parsed.pathname.split("/").filter(Boolean);
 
-    return (
-      segments.length === 2 &&
-      /^[A-Za-z0-9-]+$/.test(segments[0]) &&
-      /^[A-Za-z0-9_.-]+$/.test(segments[1]) &&
-      segments[1] !== "." &&
-      segments[1] !== ".."
-    );
+    if (
+      segments.length !== 2 ||
+      !/^[A-Za-z0-9-]+$/.test(segments[0]) ||
+      !GITHUB_REPOSITORY_PATTERN.test(segments[1]) ||
+      segments[0] === "." ||
+      segments[0] === ".." ||
+      segments[1] === "." ||
+      segments[1] === ".."
+    ) {
+      return false;
+    }
+
+    return true;
   } catch {
     return false;
   }
 }
 
 function normalizeRepositoryUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase();
+  try {
+    const parsed = new URL(url.trim());
+    const segments = parsed.pathname.split("/").filter(Boolean);
+
+    return `https://github.com/${segments[0].toLowerCase()}/${segments[1].toLowerCase()}`;
+  } catch {
+    return url.trim().replace(/\/+$/, "").toLowerCase();
+  }
 }
 
-function getErrorMessage(data: unknown, status: number): string {
-  if (data && typeof data === "object") {
+function getGitHubOwnerAndRepo(url: string): {
+  owner: string;
+  repo: string;
+} {
+  if (!isValidGitHubRepositoryUrl(url)) {
+    throw new Error(
+      "Please enter a valid GitHub repository URL.",
+    );
+  }
+
+  const parsed = new URL(url.trim());
+  const segments = parsed.pathname.split("/").filter(Boolean);
+
+  return {
+    owner: segments[0],
+    repo: segments[1],
+  };
+}
+
+function isApiHealth(value: unknown): value is ApiHealth {
+  return (
+    isRecord(value) &&
+    typeof value.service === "string" &&
+    typeof value.status === "string"
+  );
+}
+
+function isProject(value: unknown): value is Project {
+  return (
+    isRecord(value) &&
+    typeof value.id === "number" &&
+    Number.isInteger(value.id) &&
+    typeof value.name === "string" &&
+    (typeof value.description === "string" ||
+      value.description === null) &&
+    typeof value.repositoryUrl === "string" &&
+    typeof value.createdAt === "string"
+  );
+}
+
+function isRepositoryAnalysis(
+  value: unknown,
+): value is RepositoryAnalysis {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.name === "string" &&
+    typeof value.fullName === "string" &&
+    (typeof value.description === "string" ||
+      value.description === null) &&
+    typeof value.htmlUrl === "string" &&
+    typeof value.defaultBranch === "string" &&
+    isNonNegativeNumber(value.stars) &&
+    isNonNegativeNumber(value.forks) &&
+    isNonNegativeNumber(value.openIssues) &&
+    (typeof value.primaryLanguage === "string" ||
+      value.primaryLanguage === null) &&
+    isRecord(value.languages) &&
+    Object.values(value.languages).every(isNonNegativeNumber)
+  );
+}
+
+function isRepositoryStructure(
+  value: unknown,
+): value is RepositoryStructure {
+  if (!isRecord(value) || !isRecord(value.summary)) {
+    return false;
+  }
+
+  const summary = value.summary;
+
+  const validSummary =
+    isStringArray(summary.topLevelFolders) &&
+    isStringArray(summary.importantFiles) &&
+    isStringArray(summary.detectedTechnologies) &&
+    isStringArray(summary.detectedAreas) &&
+    typeof summary.explanation === "string";
+
+  const validEntries =
+    Array.isArray(value.entries) &&
+    value.entries.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.path === "string" &&
+        (entry.type === "blob" || entry.type === "tree") &&
+        (entry.size === null ||
+          isNonNegativeNumber(entry.size)),
+    );
+
+  return (
+    typeof value.repository === "string" &&
+    typeof value.defaultBranch === "string" &&
+    isNonNegativeNumber(value.totalEntries) &&
+    isNonNegativeNumber(value.fileCount) &&
+    isNonNegativeNumber(value.directoryCount) &&
+    typeof value.truncated === "boolean" &&
+    validSummary &&
+    validEntries
+  );
+}
+
+function readStoredValue<T>(
+  key: string,
+  fallback: T,
+  isValid: (value: unknown) => value is T,
+): T {
+  try {
+    const stored = window.localStorage.getItem(key);
+
+    if (stored === null) {
+      return fallback;
+    }
+
+    const parsed: unknown = JSON.parse(stored);
+
+    return isValid(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function readResponse(
+  response: Response,
+): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function getErrorMessage(
+  data: unknown,
+  status: number,
+): string {
+  if (isRecord(data)) {
     const apiError = data as ApiErrorResponse;
 
-    if (apiError.messages && typeof apiError.messages === "object") {
+    if (isRecord(apiError.messages)) {
       const messages = Object.values(apiError.messages).filter(
         (item): item is string =>
           typeof item === "string" && item.trim().length > 0,
@@ -108,45 +306,86 @@ function getErrorMessage(data: unknown, status: number): string {
       }
     }
 
-    if (typeof apiError.message === "string" && apiError.message.trim()) {
+    if (
+      typeof apiError.message === "string" &&
+      apiError.message.trim()
+    ) {
       return apiError.message;
     }
 
-    if (typeof apiError.error === "string" && apiError.error.trim()) {
+    if (
+      typeof apiError.error === "string" &&
+      apiError.error.trim()
+    ) {
       return apiError.error;
     }
   }
 
-  if (status === 404) {
-    return "The requested resource was not found.";
+  if (typeof data === "string" && data.trim()) {
+    return data.slice(0, 500);
   }
 
-  if (status === 403 || status === 429) {
-    return "GitHub API rate limit or access restrictions may have been reached. Please try again later.";
+  if (status === 400) {
+    return "Invalid request. Check the submitted information.";
+  }
+
+  if (status === 401 || status === 403) {
+    return "Access denied. Check the API permissions and GitHub access limits.";
+  }
+
+  if (status === 404) {
+    return "The requested resource was not found. Verify the endpoint and resource ID.";
+  }
+
+  if (status === 405) {
+    return "This HTTP method is not supported by the backend endpoint.";
+  }
+
+  if (status === 409) {
+    return "This resource already exists or conflicts with existing data.";
+  }
+
+  if (status === 429) {
+    return "Too many requests. Please wait and try again.";
+  }
+
+  if (status >= 500) {
+    return "The backend encountered an error. Check the backend logs and try again.";
   }
 
   return `Request failed (HTTP ${status}). Please try again.`;
 }
 
-async function readResponse(response: Response): Promise<unknown> {
-  return response.json().catch(() => null);
-}
+async function apiRequest(
+  path: string,
+  init?: RequestInit,
+): Promise<unknown> {
+  let response: Response;
 
-function getGitHubOwnerAndRepo(url: string): {
-  owner: string;
-  repo: string;
-} {
-  const parsedUrl = new URL(url.trim());
-  const segments = parsedUrl.pathname.split("/").filter(Boolean);
-
-  if (segments.length !== 2 || !segments[0] || !segments[1]) {
-    throw new Error("The URL must include a repository owner and name.");
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(init?.body
+          ? { "Content-Type": "application/json" }
+          : {}),
+        ...init?.headers,
+      },
+    });
+  } catch {
+    throw new Error(
+      "Could not reach the TraceMind API. Check your internet connection, backend availability, and CORS configuration.",
+    );
   }
 
-  return {
-    owner: segments[0],
-    repo: segments[1],
-  };
+  const data = await readResponse(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, response.status));
+  }
+
+  return data;
 }
 
 function formatBytes(bytes: number): string {
@@ -165,114 +404,64 @@ function formatBytes(bytes: number): string {
   return `${bytes} bytes`;
 }
 
-function isRepositoryAnalysis(value: unknown): value is RepositoryAnalysis {
-  if (!value || typeof value !== "object") {
-    return false;
+function getDateLabel(date: string): string {
+  if (!date || Number.isNaN(Date.parse(date))) {
+    return "Date unavailable";
   }
 
-  const data = value as Partial<RepositoryAnalysis>;
-
-  return (
-    typeof data.fullName === "string" &&
-    typeof data.name === "string" &&
-    typeof data.htmlUrl === "string" &&
-    typeof data.defaultBranch === "string" &&
-    typeof data.stars === "number" &&
-    typeof data.forks === "number" &&
-    typeof data.openIssues === "number" &&
-    !!data.languages &&
-    typeof data.languages === "object" &&
-    !Array.isArray(data.languages)
-  );
-}
-
-function isRepositoryStructure(
-  value: unknown,
-): value is RepositoryStructure {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const data = value as Partial<RepositoryStructure>;
-  const summary = data.summary;
-
-  if (
-    typeof data.repository !== "string" ||
-    typeof data.defaultBranch !== "string" ||
-    typeof data.totalEntries !== "number" ||
-    typeof data.fileCount !== "number" ||
-    typeof data.directoryCount !== "number" ||
-    typeof data.truncated !== "boolean" ||
-    !summary ||
-    typeof summary !== "object" ||
-    !Array.isArray(data.entries)
-  ) {
-    return false;
-  }
-
-  const validSummaryArrays = [
-    summary.topLevelFolders,
-    summary.importantFiles,
-    summary.detectedTechnologies,
-    summary.detectedAreas,
-  ].every(
-    (items) =>
-      Array.isArray(items) &&
-      items.every((item) => typeof item === "string"),
-  );
-
-  const validEntries = data.entries.every((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-
-    const item = entry as StructureEntry;
-
-    return (
-      typeof item.path === "string" &&
-      (item.type === "blob" || item.type === "tree") &&
-      (item.size === null ||
-        (typeof item.size === "number" && Number.isFinite(item.size)))
-    );
-  });
-
-  return (
-    validSummaryArrays &&
-    typeof summary.explanation === "string" &&
-    validEntries
-  );
+  return new Date(date).toLocaleDateString();
 }
 
 function App() {
-  // Backend and workspace state
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthError, setHealthError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] =
     useState<FormMessageType>("success");
+
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteError, setDeleteError] = useState("");
+  const [deleteSuccess, setDeleteSuccess] = useState("");
 
-  // Add repository form
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [repositoryUrl, setRepositoryUrl] = useState("");
 
-  // GitHub metadata analysis
-  const [analysisUrl, setAnalysisUrl] = useState("");
+  const [analysisUrl, setAnalysisUrl] = useState(() =>
+    readStoredValue("tracemind.analysisUrl", "", isString),
+  );
+
   const [analysis, setAnalysis] =
-    useState<RepositoryAnalysis | null>(null);
+    useState<RepositoryAnalysis | null>(() =>
+      readStoredValue(
+        "tracemind.analysis",
+        null,
+        (value): value is RepositoryAnalysis | null =>
+          value === null || isRepositoryAnalysis(value),
+      ),
+    );
+
+  const [structureUrl, setStructureUrl] = useState(() =>
+    readStoredValue("tracemind.structureUrl", "", isString),
+  );
+
+  const [structure, setStructure] =
+    useState<RepositoryStructure | null>(() =>
+      readStoredValue(
+        "tracemind.structure",
+        null,
+        (value): value is RepositoryStructure | null =>
+          value === null || isRepositoryStructure(value),
+      ),
+    );
+
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
-
-  // Repository structure analysis
-  const [structureUrl, setStructureUrl] = useState("");
-  const [structure, setStructure] =
-    useState<RepositoryStructure | null>(null);
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
   const [structureError, setStructureError] = useState("");
   const [structureFilter, setStructureFilter] =
@@ -280,71 +469,98 @@ function App() {
   const [showAllStructureEntries, setShowAllStructureEntries] =
     useState(false);
 
+  useEffect(() => {
+    const save = (key: string, value: unknown) => {
+      try {
+        if (value === null || value === "") {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, JSON.stringify(value));
+        }
+      } catch {
+        // Local storage may be disabled or full.
+      }
+    };
+
+    save("tracemind.analysisUrl", analysisUrl);
+    save("tracemind.analysis", analysis);
+    save("tracemind.structureUrl", structureUrl);
+    save("tracemind.structure", structure);
+  }, [analysisUrl, analysis, structureUrl, structure]);
+
   const loadProjects = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE}/projects`);
+      const data = await apiRequest("/projects");
 
-      if (!response.ok) {
-        const data = await readResponse(response);
-        throw new Error(getErrorMessage(data, response.status));
+      if (!Array.isArray(data) || !data.every(isProject)) {
+        throw new Error(
+          "The server returned an invalid project list.",
+        );
       }
 
-      const data: unknown = await readResponse(response);
-
-      if (!Array.isArray(data)) {
-        throw new Error("The server returned an invalid project list.");
-      }
-
-      setProjects(data as Project[]);
+      setProjects(data);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Could not load repositories. Check your backend connection.",
+          : "Could not load repositories.",
       );
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const checkHealth = useCallback(async () => {
+    try {
+      const data = await apiRequest("/health");
+
+      if (!isApiHealth(data)) {
+        throw new Error(
+          "The backend returned an invalid health response.",
+        );
+      }
+
+      setHealth(data);
+      setHealthError("");
+    } catch (err) {
+      setHealth(null);
+      setHealthError(
+        err instanceof Error ? err.message : "Backend unavailable",
+      );
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
 
-    async function checkHealth() {
+    const runHealthCheck = async () => {
       try {
-        const response = await fetch(`${API_BASE}/health`);
+        const data = await apiRequest("/health");
 
-        if (!response.ok) {
-          throw new Error("Backend unavailable");
-        }
-
-        const data: unknown = await readResponse(response);
-
-        if (
-          !data ||
-          typeof data !== "object" ||
-          !("service" in data) ||
-          !("status" in data)
-        ) {
-          throw new Error("Invalid health response");
+        if (!isApiHealth(data)) {
+          throw new Error("Invalid health response.");
         }
 
         if (active) {
-          setHealth(data as ApiHealth);
+          setHealth(data);
           setHealthError("");
         }
-      } catch {
+      } catch (err) {
         if (active) {
           setHealth(null);
-          setHealthError("Backend unavailable");
+          setHealthError(
+            err instanceof Error
+              ? err.message
+              : "Backend unavailable",
+          );
         }
       }
-    }
+    };
 
-    void checkHealth();
+    void runHealthCheck();
     void loadProjects();
 
     return () => {
@@ -361,13 +577,12 @@ function App() {
   ) {
     event.preventDefault();
     setAnalysisError("");
-    setAnalysis(null);
 
-    const trimmedUrl = analysisUrl.trim();
+    const url = analysisUrl.trim();
 
-    if (!isValidGitHubRepositoryUrl(trimmedUrl)) {
+    if (!isValidGitHubRepositoryUrl(url)) {
       setAnalysisError(
-        "Enter a valid GitHub repository URL, such as https://github.com/Aditya957258/TraceMind",
+        "Enter a valid URL, such as https://github.com/Aditya957258/TraceMind",
       );
       return;
     }
@@ -376,42 +591,34 @@ function App() {
     let repo: string;
 
     try {
-      const parsed = getGitHubOwnerAndRepo(trimmedUrl);
-      owner = parsed.owner;
-      repo = parsed.repo;
+      ({ owner, repo } = getGitHubOwnerAndRepo(url));
     } catch {
-      setAnalysisError("Please enter a valid GitHub repository URL.");
+      setAnalysisError("Invalid GitHub repository URL.");
       return;
     }
 
     setAnalyzing(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE}/analysis/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      const data = await apiRequest(
+        `/analysis/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
       );
-
-      const data: unknown = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(getErrorMessage(data, response.status));
-      }
 
       if (!isRepositoryAnalysis(data)) {
         throw new Error(
-          "The server returned an unexpected repository analysis response.",
+          "Unexpected repository analysis response from the backend.",
         );
       }
 
+      setAnalysisUrl(url);
       setAnalysis(data);
-
-      // Keep the same repository ready for structure analysis.
-      setStructureUrl(trimmedUrl);
+      setStructureUrl(url);
+      setAnalysisError("");
     } catch (err) {
       setAnalysisError(
         err instanceof Error
           ? err.message
-          : "Analysis failed. Check that your backend is running.",
+          : "Repository analysis failed.",
       );
     } finally {
       setAnalyzing(false);
@@ -423,13 +630,12 @@ function App() {
   ) {
     event.preventDefault();
     setStructureError("");
-    setStructure(null);
     setShowAllStructureEntries(false);
     setStructureFilter("all");
 
-    const trimmedUrl = structureUrl.trim();
+    const url = structureUrl.trim();
 
-    if (!isValidGitHubRepositoryUrl(trimmedUrl)) {
+    if (!isValidGitHubRepositoryUrl(url)) {
       setStructureError(
         "Enter a valid GitHub repository URL, such as https://github.com/Aditya957258/TraceMind",
       );
@@ -440,39 +646,33 @@ function App() {
     let repo: string;
 
     try {
-      const parsed = getGitHubOwnerAndRepo(trimmedUrl);
-      owner = parsed.owner;
-      repo = parsed.repo;
+      ({ owner, repo } = getGitHubOwnerAndRepo(url));
     } catch {
-      setStructureError("Please enter a valid GitHub repository URL.");
+      setStructureError("Invalid GitHub repository URL.");
       return;
     }
 
     setAnalyzingStructure(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE}/structure/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      const data = await apiRequest(
+        `/structure/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
       );
-
-      const data: unknown = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(getErrorMessage(data, response.status));
-      }
 
       if (!isRepositoryStructure(data)) {
         throw new Error(
-          "The server returned an unexpected repository structure response.",
+          "Unexpected repository structure response from the backend.",
         );
       }
 
+      setStructureUrl(url);
       setStructure(data);
+      setStructureError("");
     } catch (err) {
       setStructureError(
         err instanceof Error
           ? err.message
-          : "Structure analysis failed. Check that your backend is running.",
+          : "Repository structure analysis failed.",
       );
     } finally {
       setAnalyzingStructure(false);
@@ -502,9 +702,7 @@ function App() {
     }
 
     if (!isValidGitHubRepositoryUrl(trimmedUrl)) {
-      setMessage(
-        "Enter a valid HTTPS GitHub repository URL, such as https://github.com/username/repository",
-      );
+      setMessage("Enter a valid HTTPS GitHub repository URL.");
       setMessageType("error");
       return;
     }
@@ -517,15 +715,13 @@ function App() {
 
     const normalizedUrl = normalizeRepositoryUrl(trimmedUrl);
 
-    const alreadyExists = projects.some(
-      (project) =>
-        normalizeRepositoryUrl(project.repositoryUrl) === normalizedUrl,
-    );
-
-    if (alreadyExists) {
-      setMessage(
-        "This repository is already in your workspace. Refresh the list to check the latest data.",
-      );
+    if (
+      projects.some(
+        (project) =>
+          normalizeRepositoryUrl(project.repositoryUrl) === normalizedUrl,
+      )
+    ) {
+      setMessage("This repository is already in your workspace.");
       setMessageType("error");
       return;
     }
@@ -534,11 +730,8 @@ function App() {
     setMessageType("success");
 
     try {
-      const response = await fetch(`${API_BASE}/projects`, {
+      const data = await apiRequest("/projects", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           name: trimmedName,
           description: trimmedDescription || null,
@@ -546,39 +739,21 @@ function App() {
         }),
       });
 
-      const data: unknown = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(getErrorMessage(data, response.status));
-      }
-
-      if (
-        !data ||
-        typeof data !== "object" ||
-        !("id" in data) ||
-        !("name" in data) ||
-        !("repositoryUrl" in data)
-      ) {
+      if (!isProject(data)) {
         throw new Error(
-          "The server returned an unexpected response. Refresh your workspace.",
+          "The server returned an unexpected response. Refresh the workspace to check whether the repository was saved.",
         );
       }
-
-      const savedProject = data as Project;
 
       setProjects((current) => {
         const exists = current.some(
           (project) =>
-            project.id === savedProject.id ||
+            project.id === data.id ||
             normalizeRepositoryUrl(project.repositoryUrl) ===
-              normalizeRepositoryUrl(savedProject.repositoryUrl),
+              normalizeRepositoryUrl(data.repositoryUrl),
         );
 
-        if (exists) {
-          return current;
-        }
-
-        return [savedProject, ...current];
+        return exists ? current : [data, ...current];
       });
 
       setName("");
@@ -591,7 +766,7 @@ function App() {
       setMessage(
         err instanceof Error
           ? err.message
-          : "Could not save the repository. Check your backend connection.",
+          : "Could not save the repository.",
       );
       setMessageType("error");
     } finally {
@@ -600,8 +775,12 @@ function App() {
   }
 
   async function handleDeleteProject(project: Project) {
+    if (deletingId !== null) {
+      return;
+    }
+
     const confirmed = window.confirm(
-      `Are you sure you want to delete "${project.name}"?`,
+      `Are you sure you want to delete "${project.name}"? This action cannot be undone.`,
     );
 
     if (!confirmed) {
@@ -610,34 +789,31 @@ function App() {
 
     setDeletingId(project.id);
     setDeleteError("");
+    setDeleteSuccess("");
 
     try {
-      const response = await fetch(
-        `${API_BASE}/projects/${project.id}`,
+      await apiRequest(
+        `/projects/${encodeURIComponent(String(project.id))}`,
         { method: "DELETE" },
       );
-
-      if (!response.ok) {
-        const data = await readResponse(response);
-
-        throw new Error(
-          response.status === 404
-            ? "Repository not found. Refresh the list."
-            : getErrorMessage(data, response.status),
-        );
-      }
 
       setProjects((current) =>
         current.filter((item) => item.id !== project.id),
       );
 
-      setDeleteError("");
+      setDeleteSuccess(
+        `"${project.name}" was deleted successfully.`,
+      );
     } catch (err) {
       setDeleteError(
         err instanceof Error
           ? err.message
-          : "Could not delete the repository. Check your backend connection.",
+          : "Could not delete the repository.",
       );
+
+      // Reconcile the dashboard with server state in case
+      // the server processed the request but its response failed.
+      await loadProjects();
     } finally {
       setDeletingId(null);
     }
@@ -660,6 +836,17 @@ function App() {
   const visibleStructureEntries = showAllStructureEntries
     ? filteredStructureEntries
     : filteredStructureEntries.slice(0, 30);
+
+  const languageEntries = analysis
+    ? Object.entries(analysis.languages)
+        .filter(([, bytes]) => isNonNegativeNumber(bytes))
+        .sort((a, b) => b[1] - a[1])
+    : [];
+
+  const totalLanguageBytes = languageEntries.reduce(
+    (sum, [, bytes]) => sum + bytes,
+    0,
+  );
 
   return (
     <div className="app-shell">
@@ -687,12 +874,10 @@ function App() {
           <a className="nav-item active" href="#overview">
             <span>◫</span> Overview
           </a>
-
           <a className="nav-item" href="#projects">
             <span>⑂</span> Repositories
             <span className="nav-count">{projects.length}</span>
           </a>
-
           <a className="nav-item" href="#insights">
             <span>✳</span> AI insights
             <span className="soon-tag">BETA</span>
@@ -705,15 +890,12 @@ function App() {
           <a className="nav-item" href="#projects">
             <span>⌘</span> Project explorer
           </a>
-
           <a className="nav-item" href="#add-project">
             <span>＋</span> Add repository
           </a>
-
           <a className="nav-item" href="#repository-analysis">
             <span>⌕</span> Analyze repository
           </a>
-
           <a className="nav-item" href="#repository-structure">
             <span>▤</span> Repository structure
           </a>
@@ -757,9 +939,10 @@ function App() {
           <div className="topbar-actions">
             <span className={`api-badge ${health ? "connected" : ""}`}>
               <span className="status-dot" />
-              {health ? "API connected" : healthError || "Connecting"}
+              {health
+                ? "API connected"
+                : healthError || "Connecting"}
             </span>
-
             <a
               className="topbar-github"
               href="https://github.com/Aditya957258"
@@ -778,18 +961,15 @@ function App() {
                 <span className="eyebrow-sparkle">✳</span>
                 YOUR DEVELOPER WORKSPACE
               </div>
-
               <h1>
                 Build with clarity<span className="title-period">.</span>
               </h1>
-
               <p>
                 Understand your codebase. Discover connections.
                 <br className="desktop-break" /> Make every change with
                 confidence.
               </p>
             </div>
-
             <a className="primary-button" href="#add-project">
               <span>＋</span> Add repository
             </a>
@@ -801,11 +981,9 @@ function App() {
                 <span className="stat-icon purple-icon">⑂</span>
                 <span className="stat-caption">WORKSPACE</span>
               </div>
-
               <div className="stat-value">
                 {projects.length.toString().padStart(2, "0")}
               </div>
-
               <div className="stat-bottom">
                 <strong>Repositories</strong>
                 <span>Tracked projects</span>
@@ -817,11 +995,9 @@ function App() {
                 <span className="stat-icon green-icon">✓</span>
                 <span className="stat-caption">CONNECTIVITY</span>
               </div>
-
               <div className="stat-value stat-word">
                 {health ? "Healthy" : "Checking"}
               </div>
-
               <div className="stat-bottom">
                 <strong>Backend status</strong>
                 <span>{health?.service ?? "Spring Boot API"}</span>
@@ -833,11 +1009,9 @@ function App() {
                 <span className="stat-icon blue-icon">✳</span>
                 <span className="stat-caption">INTELLIGENCE</span>
               </div>
-
               <div className="stat-value stat-word">
                 {analysis ? "Analyzed" : "Ready"}
               </div>
-
               <div className="stat-bottom">
                 <strong>Repository analysis</strong>
                 <span>
@@ -849,33 +1023,23 @@ function App() {
 
           <section className="insights-panel" id="insights">
             <div className="insights-glow" />
-
             <div className="insights-content">
               <div className="insights-label">
                 <span>✳</span> TRACEMIND INTELLIGENCE
               </div>
-
               <h2>Your code has a story.</h2>
-
               <p>
                 Explore public repository metadata, programming language
-                statistics, files, folders, and detected technologies. These
-                features establish a foundation for deeper code understanding.
+                statistics, files, folders, and detected technologies.
+                These features establish a foundation for deeper code
+                understanding.
               </p>
-
               <div className="insights-features">
-                <span>
-                  <i>✓</i> Repository metadata
-                </span>
-                <span>
-                  <i>✓</i> Language statistics
-                </span>
-                <span>
-                  <i>✓</i> File and folder analysis
-                </span>
+                <span><i>✓</i> Repository metadata</span>
+                <span><i>✓</i> Language statistics</span>
+                <span><i>✓</i> File and folder analysis</span>
               </div>
             </div>
-
             <div className="insights-visual" aria-hidden="true">
               <div className="orbit orbit-one" />
               <div className="orbit orbit-two" />
@@ -885,11 +1049,11 @@ function App() {
               <span className="orbit-node node-two">⑂</span>
               <span className="orbit-node node-three">✳</span>
             </div>
-
-            <span className="preview-badge">REPOSITORY INTELLIGENCE</span>
+            <span className="preview-badge">
+              REPOSITORY INTELLIGENCE
+            </span>
           </section>
 
-          {/* GitHub metadata analysis */}
           <section className="analysis-section" id="repository-analysis">
             <div className="section-heading">
               <div>
@@ -910,7 +1074,6 @@ function App() {
               <label htmlFor="analysis-url">
                 GitHub repository URL <span>*</span>
               </label>
-
               <input
                 id="analysis-url"
                 type="url"
@@ -926,16 +1089,16 @@ function App() {
                 spellCheck={false}
                 required
               />
-
               <button
                 className="primary-button form-submit"
                 type="submit"
                 disabled={analyzing}
               >
-                {analyzing ? "Analyzing repository…" : "Analyze repository"}
+                {analyzing
+                  ? "Analyzing repository…"
+                  : "Analyze repository"}
                 {!analyzing && <span>→</span>}
               </button>
-
               {analysisError && (
                 <p className="form-message error-message" role="alert">
                   {analysisError}
@@ -954,7 +1117,6 @@ function App() {
                         "This repository has no description."}
                     </p>
                   </div>
-
                   <a
                     className="secondary-button"
                     href={analysis.htmlUrl}
@@ -971,19 +1133,16 @@ function App() {
                     <small>Stars</small>
                     <strong>{analysis.stars.toLocaleString()}</strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>⑂</span>
                     <small>Forks</small>
                     <strong>{analysis.forks.toLocaleString()}</strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>◎</span>
                     <small>Open issues</small>
                     <strong>{analysis.openIssues.toLocaleString()}</strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>{"</>"}</span>
                     <small>Primary language</small>
@@ -1002,91 +1161,58 @@ function App() {
 
                 <div className="language-section">
                   <h4>Language breakdown</h4>
-
-                  {Object.keys(analysis.languages).length === 0 ? (
-                    <p>
-                      No language statistics are available for this repository.
-                    </p>
+                  {languageEntries.length === 0 ||
+                  totalLanguageBytes === 0 ? (
+                    <p>No measurable language statistics are available.</p>
                   ) : (
-                    (() => {
-                      const entries = Object.entries(analysis.languages)
-                        .filter(
-                          ([, bytes]) =>
-                            typeof bytes === "number" &&
-                            Number.isFinite(bytes) &&
-                            bytes >= 0,
-                        )
-                        .sort((a, b) => b[1] - a[1]);
-
-                      const totalBytes = entries.reduce(
-                        (sum, [, bytes]) => sum + bytes,
-                        0,
-                      );
-
-                      if (entries.length === 0 || totalBytes === 0) {
-                        return (
-                          <p>
-                            No measurable language statistics are available.
-                          </p>
-                        );
-                      }
-
-                      return (
-                        <>
-                          <div
-                            className="language-bar"
-                            role="img"
-                            aria-label="Programming language distribution"
-                          >
-                            {entries.map(([language, bytes]) => (
-                              <span
-                                key={language}
-                                className="language-bar-segment"
-                                title={`${language}: ${(
-                                  (bytes / totalBytes) *
-                                  100
-                                ).toFixed(1)}%`}
-                                style={{
-                                  width: `${(bytes / totalBytes) * 100}%`,
-                                }}
-                              />
-                            ))}
+                    <>
+                      <div
+                        className="language-bar"
+                        role="img"
+                        aria-label="Programming language distribution"
+                      >
+                        {languageEntries.map(([language, bytes]) => (
+                          <span
+                            key={language}
+                            className="language-bar-segment"
+                            title={`${language}: ${(
+                              (bytes / totalLanguageBytes) *
+                              100
+                            ).toFixed(1)}%`}
+                            style={{
+                              width: `${
+                                (bytes / totalLanguageBytes) * 100
+                              }%`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <div className="language-list">
+                        {languageEntries.map(([language, bytes]) => (
+                          <div className="language-item" key={language}>
+                            <span className="language-name">
+                              <span className="language-dot" />
+                              {language}
+                            </span>
+                            <span>
+                              {(
+                                (bytes / totalLanguageBytes) *
+                                100
+                              ).toFixed(1)}
+                              %
+                            </span>
+                            <small>{formatBytes(bytes)}</small>
                           </div>
-
-                          <div className="language-list">
-                            {entries.map(([language, bytes]) => (
-                              <div className="language-item" key={language}>
-                                <span className="language-name">
-                                  <span className="language-dot" />
-                                  {language}
-                                </span>
-
-                                <span>
-                                  {(
-                                    (bytes / totalBytes) *
-                                    100
-                                  ).toFixed(1)}
-                                  %
-                                </span>
-
-                                <small>{formatBytes(bytes)}</small>
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      );
-                    })()
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               </article>
             )}
           </section>
 
-          {/* Repository structure analysis */}
-          <section
-            className="analysis-section"
-            id="repository-structure"
-          >
+          <section className="analysis-section" id="repository-structure">
             <div className="section-heading">
               <div>
                 <div className="eyebrow">CODEBASE EXPLORER</div>
@@ -1106,7 +1232,6 @@ function App() {
               <label htmlFor="structure-url">
                 GitHub repository URL <span>*</span>
               </label>
-
               <input
                 id="structure-url"
                 type="url"
@@ -1122,7 +1247,6 @@ function App() {
                 spellCheck={false}
                 required
               />
-
               <button
                 className="primary-button form-submit"
                 type="submit"
@@ -1158,11 +1282,15 @@ function App() {
               <article className="analysis-result">
                 <div className="analysis-result-header">
                   <div>
-                    <div className="eyebrow">STRUCTURE ANALYSIS RESULT</div>
+                    <div className="eyebrow">
+                      STRUCTURE ANALYSIS RESULT
+                    </div>
                     <h3>{structure.repository}</h3>
                     <p>
                       Default branch:{" "}
-                      <strong>{structure.defaultBranch || "Not available"}</strong>
+                      <strong>
+                        {structure.defaultBranch || "Not available"}
+                      </strong>
                     </p>
                   </div>
                 </div>
@@ -1175,13 +1303,11 @@ function App() {
                       {structure.totalEntries.toLocaleString()}
                     </strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>▧</span>
                     <small>Files</small>
                     <strong>{structure.fileCount.toLocaleString()}</strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>▣</span>
                     <small>Directories</small>
@@ -1189,7 +1315,6 @@ function App() {
                       {structure.directoryCount.toLocaleString()}
                     </strong>
                   </div>
-
                   <div className="analysis-stat">
                     <span>⌘</span>
                     <small>Branch</small>
@@ -1200,7 +1325,7 @@ function App() {
                 {structure.truncated && (
                   <div className="notice-error" role="status">
                     The repository tree was truncated by the GitHub API.
-                    The displayed entries may not include every file or folder.
+                    Some files or folders may be missing.
                   </div>
                 )}
 
@@ -1208,14 +1333,13 @@ function App() {
                   <h4>Repository summary</h4>
                   <p>
                     {structure.summary.explanation ||
-                      "No additional repository explanation is available."}
+                      "No additional explanation is available."}
                   </p>
                 </div>
 
                 <div className="language-section">
                   <h4>Top-level folders</h4>
-
-                  {structure.summary.topLevelFolders.length > 0 ? (
+                  {structure.summary.topLevelFolders.length ? (
                     <div className="insights-features">
                       {structure.summary.topLevelFolders.map((folder) => (
                         <span key={folder}>
@@ -1230,8 +1354,7 @@ function App() {
 
                 <div className="language-section">
                   <h4>Detected technologies</h4>
-
-                  {structure.summary.detectedTechnologies.length > 0 ? (
+                  {structure.summary.detectedTechnologies.length ? (
                     <div className="insights-features">
                       {structure.summary.detectedTechnologies.map(
                         (technology) => (
@@ -1248,8 +1371,7 @@ function App() {
 
                 <div className="language-section">
                   <h4>Detected project areas</h4>
-
-                  {structure.summary.detectedAreas.length > 0 ? (
+                  {structure.summary.detectedAreas.length ? (
                     <div className="insights-features">
                       {structure.summary.detectedAreas.map((area) => (
                         <span key={area}>
@@ -1264,8 +1386,7 @@ function App() {
 
                 <div className="language-section">
                   <h4>Important files</h4>
-
-                  {structure.summary.importantFiles.length > 0 ? (
+                  {structure.summary.importantFiles.length ? (
                     <ul className="structure-important-files">
                       {structure.summary.importantFiles.map((file) => (
                         <li key={file}>
@@ -1280,10 +1401,8 @@ function App() {
 
                 <div className="language-section">
                   <h4>File and folder explorer</h4>
-
                   <div className="structure-toolbar">
                     <label htmlFor="structure-filter">Show</label>
-
                     <select
                       id="structure-filter"
                       value={structureFilter}
@@ -1297,7 +1416,6 @@ function App() {
                       <option value="files">Files only</option>
                       <option value="folders">Folders only</option>
                     </select>
-
                     <span className="structure-entry-count">
                       {filteredStructureEntries.length.toLocaleString()} entries
                     </span>
@@ -1308,22 +1426,22 @@ function App() {
                   ) : (
                     <div className="structure-tree">
                       {visibleStructureEntries.map((entry) => (
-                        <div className="structure-entry" key={entry.path}>
+                        <div
+                          className="structure-entry"
+                          key={entry.path}
+                        >
                           <span
                             className="structure-entry-icon"
                             aria-hidden="true"
                           >
                             {entry.type === "tree" ? "📁" : "📄"}
                           </span>
-
                           <code className="structure-entry-path">
                             {entry.path}
                           </code>
-
                           <span className="structure-entry-type">
                             {entry.type === "tree" ? "Folder" : "File"}
                           </span>
-
                           <small className="structure-entry-size">
                             {entry.size === null
                               ? "—"
@@ -1352,7 +1470,6 @@ function App() {
             )}
           </section>
 
-          {/* Workspace repositories */}
           <section className="repositories-section" id="projects">
             <div className="section-heading">
               <div>
@@ -1363,11 +1480,15 @@ function App() {
                 </h2>
                 <p>All your tracked projects, in one workspace.</p>
               </div>
-
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => void loadProjects()}
+                onClick={() => {
+                  setDeleteError("");
+                  setDeleteSuccess("");
+                  void loadProjects();
+                  void checkHealth();
+                }}
                 disabled={loading}
               >
                 <span className={loading ? "refreshing" : ""}>↻</span>
@@ -1385,6 +1506,12 @@ function App() {
               <div className="notice-error" role="alert">
                 {deleteError}
               </div>
+            )}
+
+            {deleteSuccess && (
+              <p className="form-message success-message" role="status">
+                {deleteSuccess}
+              </p>
             )}
 
             {loading ? (
@@ -1405,34 +1532,29 @@ function App() {
             ) : (
               <div className="repository-grid">
                 {projects.map((project) => (
-                  <article className="repository-card" key={project.id}>
+                  <article
+                    className="repository-card"
+                    key={project.id}
+                  >
                     <div className="repository-card-header">
                       <div className="repository-symbol">{"</>"}</div>
-
                       <span className="repository-status">
-                        <span className="status-dot is-online" /> CONNECTED
+                        <span className="status-dot is-online" />
+                        CONNECTED
                       </span>
-
                       <span className="repository-menu">···</span>
                     </div>
 
                     <h3>{project.name}</h3>
-
                     <p className="repository-description">
                       {project.description ||
                         "No project description added yet."}
                     </p>
 
                     <div className="repository-divider" />
-
                     <div className="repository-meta">
                       <span>PROJECT #{project.id}</span>
-                      <span>
-                        {project.createdAt &&
-                        !Number.isNaN(Date.parse(project.createdAt))
-                          ? new Date(project.createdAt).toLocaleDateString()
-                          : "Date unavailable"}
-                      </span>
+                      <span>{getDateLabel(project.createdAt)}</span>
                     </div>
 
                     <a
@@ -1461,18 +1583,14 @@ function App() {
             )}
           </section>
 
-          {/* Add repository */}
           <section className="add-section" id="add-project">
             <div className="add-section-intro">
               <div className="eyebrow">EXPAND YOUR WORKSPACE</div>
-
               <h2>Bring a project in.</h2>
-
               <p>
                 Register a repository to keep your projects organized in
                 TraceMind.
               </p>
-
               <div className="form-note">
                 <span>⌁</span>
                 Your project details are stored in your PostgreSQL database.
@@ -1495,7 +1613,6 @@ function App() {
               <label htmlFor="project-name">
                 Project name <span>*</span>
               </label>
-
               <input
                 id="project-name"
                 type="text"
@@ -1513,7 +1630,6 @@ function App() {
               <label htmlFor="repository-url">
                 GitHub repository URL <span>*</span>
               </label>
-
               <input
                 id="repository-url"
                 type="url"
@@ -1531,7 +1647,6 @@ function App() {
               />
 
               <label htmlFor="project-description">Description</label>
-
               <textarea
                 id="project-description"
                 value={description}
@@ -1573,9 +1688,8 @@ function App() {
               TraceMind <span className="footer-dot">·</span> Built for safer
               software development
             </span>
-
             <span className="footer-version">
-              LOCAL DEVELOPMENT <span>•</span> V1.0
+              DEPLOYED API <span>•</span> V1.0
             </span>
           </footer>
         </div>
