@@ -1137,7 +1137,18 @@ function App() {
           <a className="nav-item" href="#repository-structure">
             <span>▤</span> Repository structure
           </a>
-          <a className="nav-item" href="#dependency-analysis">
+          <a
+            className="nav-item"
+            href="#dependency-analysis"
+            onClick={(event) => {
+              event.preventDefault();
+              const section = document.getElementById("dependency-analysis");
+              if (section) {
+                section.scrollIntoView({ behavior: "smooth", block: "start" });
+                window.history.replaceState(null, "", "#dependency-analysis");
+              }
+            }}
+          >
             <span>⑂</span> Dependency analysis
           </a>
         </nav>
