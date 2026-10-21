@@ -44,8 +44,14 @@ public class CodeAnalysisService {
 
     @Autowired
     public CodeAnalysisService(RiskScoringService riskScoringService) {
+        this(RestClient.builder(), riskScoringService);
+    }
+
+    public CodeAnalysisService(
+            RestClient.Builder githubBuilder,
+            RiskScoringService riskScoringService) {
         this.riskScoringService = riskScoringService;
-        this.github = RestClient.builder()
+        this.github = githubBuilder
                 .baseUrl("https://api.github.com")
                 .defaultHeader("Accept", "application/vnd.github+json")
                 .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
