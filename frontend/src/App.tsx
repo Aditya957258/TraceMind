@@ -1,4 +1,3 @@
-
 import {
   useCallback,
   useEffect,
@@ -59,6 +58,33 @@ type RepositoryStructure = {
     explanation: string;
   };
   entries: StructureEntry[];
+};
+
+type Dependency = {
+  source: string;
+  import: string;
+  kind: "internal" | "external";
+  target?: string;
+};
+
+type UnresolvedImport = {
+  source: string;
+  import: string;
+};
+
+type DependencyAnalysisResult = {
+  repository: string;
+  defaultBranch: string;
+  sourceFileCount: number;
+  analyzedFileCount: number;
+  skippedFileCount: number;
+  truncated: boolean;
+  dependencyCount: number;
+  unresolvedImportCount: number;
+  analyzedFiles: string[];
+  dependencies: Dependency[];
+  unresolvedImports: UnresolvedImport[];
+  note: string;
 };
 
 type RiskFinding = {
@@ -307,6 +333,50 @@ function isRepositoryStructure(
   );
 }
 
+function isDependencyAnalysisResult(
+  value: unknown,
+): value is DependencyAnalysisResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const validDependencies =
+    Array.isArray(value.dependencies) &&
+    value.dependencies.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.source === "string" &&
+        typeof item.import === "string" &&
+        (item.kind === "internal" || item.kind === "external") &&
+        (item.target === undefined ||
+          typeof item.target === "string"),
+    );
+
+  const validUnresolvedImports =
+    Array.isArray(value.unresolvedImports) &&
+    value.unresolvedImports.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.source === "string" &&
+        typeof item.import === "string",
+    );
+
+  return (
+    typeof value.repository === "string" &&
+    typeof value.defaultBranch === "string" &&
+    isNonNegativeNumber(value.sourceFileCount) &&
+    isNonNegativeNumber(value.analyzedFileCount) &&
+    isNonNegativeNumber(value.skippedFileCount) &&
+    typeof value.truncated === "boolean" &&
+    isNonNegativeNumber(value.dependencyCount) &&
+    isNonNegativeNumber(value.unresolvedImportCount) &&
+    isStringArray(value.analyzedFiles) &&
+    validDependencies &&
+    validUnresolvedImports &&
+    typeof value.note === "string"
+  );
+}
+
 function readStoredValue<T>(
   key: string,
   fallback: T,
@@ -475,6 +545,11 @@ function App() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const [dependencyAnalysis, setDependencyAnalysis] =
+    useState<DependencyAnalysisResult | null>(null);
+  const [dependencyLoading, setDependencyLoading] = useState(false);
+  const [dependencyError, setDependencyError] = useState("");
+
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] =
     useState<FormMessageType>("success");
@@ -630,6 +705,54 @@ function App() {
 
   function clearFormMessage() {
     setMessage("");
+  }
+
+  async function handleAnalyzeDependencies() {
+    setDependencyError("");
+
+    const url = analysisUrl.trim();
+
+    if (!isValidGitHubRepositoryUrl(url)) {
+      setDependencyError(
+        "Enter a valid public GitHub repository URL in the repository analysis form first.",
+      );
+      return;
+    }
+
+    let owner: string;
+    let repo: string;
+
+    try {
+      ({ owner, repo } = getGitHubOwnerAndRepo(url));
+    } catch {
+      setDependencyError("Invalid GitHub repository URL.");
+      return;
+    }
+
+    setDependencyLoading(true);
+
+    try {
+      const data = await apiRequest(
+        `/dependencies/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      );
+
+      if (!isDependencyAnalysisResult(data)) {
+        throw new Error(
+          "The backend returned an unexpected dependency analysis response.",
+        );
+      }
+
+      setDependencyAnalysis(data);
+      setDependencyError("");
+    } catch (err) {
+      setDependencyError(
+        err instanceof Error
+          ? err.message
+          : "Dependency analysis failed. Please try again.",
+      );
+    } finally {
+      setDependencyLoading(false);
+    }
   }
 
   async function handleAnalyzeRepository(
@@ -918,8 +1041,6 @@ function App() {
           : "Could not delete the repository.",
       );
 
-      // Reconcile the dashboard with server state in case
-      // the server processed the request but its response failed.
       await loadProjects();
     } finally {
       setDeletingId(null);
@@ -954,6 +1075,16 @@ function App() {
     (sum, [, bytes]) => sum + bytes,
     0,
   );
+
+  const internalDependencies =
+    dependencyAnalysis?.dependencies.filter(
+      (dependency) => dependency.kind === "internal",
+    ) ?? [];
+
+  const externalDependencies =
+    dependencyAnalysis?.dependencies.filter(
+      (dependency) => dependency.kind === "external",
+    ) ?? [];
 
   return (
     <div className="app-shell">
@@ -1005,6 +1136,9 @@ function App() {
           </a>
           <a className="nav-item" href="#repository-structure">
             <span>▤</span> Repository structure
+          </a>
+          <a className="nav-item" href="#dependency-analysis">
+            <span>⑂</span> Dependency analysis
           </a>
         </nav>
 
@@ -1692,6 +1826,236 @@ function App() {
                         : `Show all ${filteredStructureEntries.length} entries`}
                     </button>
                   )}
+                </div>
+              </article>
+            )}
+          </section>
+
+          <section
+            className="analysis-section"
+            id="dependency-analysis"
+          >
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow">CODE RELATIONSHIPS</div>
+                <h2>Dependency analysis</h2>
+                <p>
+                  Map detected source imports, identify internal file
+                  dependencies, and review unresolved relative imports.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleAnalyzeDependencies()}
+                disabled={
+                  dependencyLoading || !analysisUrl.trim()
+                }
+              >
+                {dependencyLoading
+                  ? "Mapping dependencies…"
+                  : "Map dependencies →"}
+              </button>
+            </div>
+
+            {!analysisUrl.trim() && (
+              <p className="risk-analysis-hint">
+                Enter a public GitHub repository URL in “Analyze a
+                repository” first.
+              </p>
+            )}
+
+            {dependencyError && (
+              <div className="notice-error" role="alert">
+                {dependencyError}
+              </div>
+            )}
+
+            {dependencyAnalysis && (
+              <article className="analysis-result">
+                <div className="analysis-result-header">
+                  <div>
+                    <div className="eyebrow">
+                      DEPENDENCY ANALYSIS RESULT
+                    </div>
+                    <h3>{dependencyAnalysis.repository}</h3>
+                    <p>
+                      Default branch:{" "}
+                      <strong>
+                        {dependencyAnalysis.defaultBranch ||
+                          "Not available"}
+                      </strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="analysis-stats-grid">
+                  <div className="analysis-stat">
+                    <span>▤</span>
+                    <small>Source files</small>
+                    <strong>
+                      {dependencyAnalysis.sourceFileCount.toLocaleString()}
+                    </strong>
+                  </div>
+                  <div className="analysis-stat">
+                    <span>⑂</span>
+                    <small>Dependencies</small>
+                    <strong>
+                      {dependencyAnalysis.dependencyCount.toLocaleString()}
+                    </strong>
+                  </div>
+                  <div className="analysis-stat">
+                    <span>↗</span>
+                    <small>Internal imports</small>
+                    <strong>
+                      {internalDependencies.length.toLocaleString()}
+                    </strong>
+                  </div>
+                  <div className="analysis-stat">
+                    <span>!</span>
+                    <small>Unresolved imports</small>
+                    <strong>
+                      {dependencyAnalysis.unresolvedImportCount.toLocaleString()}
+                    </strong>
+                  </div>
+                </div>
+
+                {(dependencyAnalysis.skippedFileCount > 0 ||
+                  dependencyAnalysis.truncated) && (
+                  <p className="risk-analysis-hint">
+                    Coverage note: some source files may not have been
+                    analyzed. Skipped files:{" "}
+                    {dependencyAnalysis.skippedFileCount}.
+                    {dependencyAnalysis.truncated
+                      ? " GitHub reported a truncated repository tree."
+                      : ""}
+                  </p>
+                )}
+
+                <div className="language-section">
+                  <h4>Internal dependencies</h4>
+                  <p>
+                    Imports that TraceMind resolved to another file
+                    in this repository.
+                  </p>
+
+                  {internalDependencies.length === 0 ? (
+                    <p>No internal dependencies were resolved.</p>
+                  ) : (
+                    <div className="structure-tree">
+                      {internalDependencies.map((dependency, index) => (
+                        <div
+                          className="structure-entry"
+                          key={`${dependency.source}:${dependency.import}:${index}`}
+                        >
+                          <span
+                            className="structure-entry-icon"
+                            aria-hidden="true"
+                          >
+                            ↗
+                          </span>
+                          <div className="structure-entry-path">
+                            <code>{dependency.source}</code>
+                            <small>
+                              imports {dependency.import}
+                            </small>
+                          </div>
+                          <span className="structure-entry-type">
+                            {dependency.target ?? "Resolved"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>External imports</h4>
+                  <p>
+                    Package or module imports that were not resolved
+                    to an internal source file.
+                  </p>
+
+                  {externalDependencies.length === 0 ? (
+                    <p>No external imports were detected.</p>
+                  ) : (
+                    <div className="structure-tree">
+                      {externalDependencies.map((dependency, index) => (
+                        <div
+                          className="structure-entry"
+                          key={`${dependency.source}:${dependency.import}:${index}`}
+                        >
+                          <span
+                            className="structure-entry-icon"
+                            aria-hidden="true"
+                          >
+                            ↗
+                          </span>
+                          <div className="structure-entry-path">
+                            <code>{dependency.source}</code>
+                            <small>
+                              imports {dependency.import}
+                            </small>
+                          </div>
+                          <span className="structure-entry-type">
+                            External
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Unresolved relative imports</h4>
+                  <p>
+                    These relative imports did not match a source file
+                    using the resolver's supported path rules. Check
+                    aliases, generated files, and extension conventions
+                    before treating them as errors.
+                  </p>
+
+                  {dependencyAnalysis.unresolvedImports.length === 0 ? (
+                    <p>No unresolved relative imports were reported.</p>
+                  ) : (
+                    <div className="structure-tree">
+                      {dependencyAnalysis.unresolvedImports.map(
+                        (dependency, index) => (
+                          <div
+                            className="structure-entry"
+                            key={`${dependency.source}:${dependency.import}:${index}`}
+                          >
+                            <span
+                              className="structure-entry-icon"
+                              aria-hidden="true"
+                            >
+                              !
+                            </span>
+                            <div className="structure-entry-path">
+                              <code>{dependency.source}</code>
+                              <small>
+                                imports {dependency.import}
+                              </small>
+                            </div>
+                            <span className="structure-entry-type">
+                              Unresolved
+                            </span>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Analysis note</h4>
+                  <p>{dependencyAnalysis.note}</p>
+                  <p className="risk-analysis-disclaimer">
+                    Dependency mapping uses static import patterns. It
+                    does not guarantee complete compiler-level dependency
+                    resolution and may not identify dynamic imports,
+                    configured aliases, or every language construct.
+                  </p>
                 </div>
               </article>
             )}
