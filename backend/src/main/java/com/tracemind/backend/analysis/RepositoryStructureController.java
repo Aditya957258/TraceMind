@@ -24,7 +24,11 @@ public class RepositoryStructureController {
     private final RestClient restClient;
 
     public RepositoryStructureController() {
-        this.restClient = RestClient.builder()
+        this(RestClient.builder());
+    }
+
+    RepositoryStructureController(RestClient.Builder builder) {
+        this.restClient = builder
                 .baseUrl("https://api.github.com")
                 .defaultHeader("Accept", "application/vnd.github+json")
                 .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
@@ -321,8 +325,11 @@ public class RepositoryStructureController {
         }
 
         if (path.contains("/database/")
+                || path.startsWith("database/")
                 || path.contains("/migration/")
-                || path.contains("/migrations/")) {
+                || path.startsWith("migration/")
+                || path.contains("/migrations/")
+                || path.startsWith("migrations/")) {
             addIfMissing(areas, "Database and migrations");
         }
     }
