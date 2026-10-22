@@ -127,6 +127,99 @@ class DependencyAnalysisServiceTest {
 
         fixture.server().verify();
     }
+        @Test
+    void resolvesJavaTypesStaticImportsAndPackageWildcards() {
+        Fixture fixture = createFixture();
+
+        expectJson(fixture.server(), "/repos/acme/demo", """
+                {
+                  "full_name": "acme/demo",
+                  "default_branch": "main"
+                }
+                """);
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/trees/main?recursive=1",
+                """
+                {
+                  "tree": [
+                    {
+                      "path": "src/main/java/com/acme/service/OrderService.java",
+                      "type": "blob",
+                      "sha": "service-sha",
+                      "size": 100
+                    },
+                    {
+                      "path": "src/main/java/com/acme/model/Order.java",
+                      "type": "blob",
+                      "sha": "order-sha",
+                      "size": 100
+                    }
+                  ]
+                }
+                """
+        );
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/order-sha",
+                blobJson("""
+                        package com.acme.model;
+                        public class Order {
+                            public static final String STATUS = "READY";
+                        }
+                        """)
+        );
+
+
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/service-sha",
+                blobJson("""
+                        package com.acme.service;
+                        import com.acme.model.Order;
+                        import static com.acme.model.Order.STATUS;
+                        import com.acme.model.*;
+                        import java.util.List;
+                        public class OrderService {}
+                        """)
+        );
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo");
+
+        @SuppressWarnings("unchecked")
+        var dependencies =
+                (java.util.List<Map<String, Object>>) result.get("dependencies");
+
+        assertTrue(dependencies.stream().anyMatch(dependency ->
+                "com.acme.model.Order".equals(dependency.get("import"))
+                        && "internal".equals(dependency.get("kind"))
+                        && "src/main/java/com/acme/model/Order.java"
+                                .equals(dependency.get("target"))));
+
+        assertTrue(dependencies.stream().anyMatch(dependency ->
+                "com.acme.model.Order.STATUS".equals(dependency.get("import"))
+                        && "internal".equals(dependency.get("kind"))
+                        && "src/main/java/com/acme/model/Order.java"
+                                .equals(dependency.get("target"))));
+
+        assertTrue(dependencies.stream().anyMatch(dependency ->
+                "com.acme.model.*".equals(dependency.get("import"))
+                        && "internal".equals(dependency.get("kind"))
+                        && "src/main/java/com/acme/model/Order.java"
+                                .equals(dependency.get("target"))));
+
+        assertTrue(dependencies.stream().anyMatch(dependency ->
+                "java.util.List".equals(dependency.get("import"))
+                        && "external".equals(dependency.get("kind"))));
+
+        fixture.server().verify();
+    }
+
+
 
     @Test
     void reportsUnresolvedRelativeImportsSeparately() {
@@ -231,4 +324,47 @@ class DependencyAnalysisServiceTest {
 
         fixture.server().verify();
     }
+
+    @Test
+    void resolvesCssImportsWithoutCountingCssAsSourceCode() {
+        Fixture fixture = createFixture();
+
+        expectJson(fixture.server(), "/repos/acme/demo",
+                "{\"full_name\":\"acme/demo\",\"default_branch\":\"main\"}");
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/trees/main?recursive=1",
+                "{\"truncated\":false,\"tree\":["
+                + "{\"path\":\"frontend/src/App.tsx\",\"type\":\"blob\",\"sha\":\"app-sha\",\"size\":100},"
+                + "{\"path\":\"frontend/src/App.css\",\"type\":\"blob\",\"sha\":\"css-sha\",\"size\":50}"
+                + "]}"
+        );
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/app-sha",
+                blobJson("import './App.css';")
+        );
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo");
+
+        assertEquals(1, result.get("sourceFileCount"));
+        assertEquals(1, result.get("analyzedFileCount"));
+        assertEquals(1, result.get("dependencyCount"));
+        assertEquals(0, result.get("unresolvedImportCount"));
+
+        @SuppressWarnings("unchecked")
+        var dependencies =
+                (java.util.List<Map<String, Object>>) result.get("dependencies");
+
+        assertTrue(dependencies.stream().anyMatch(dependency ->
+                "internal".equals(dependency.get("kind"))
+                        && "./App.css".equals(dependency.get("import"))
+                        && "frontend/src/App.css".equals(dependency.get("target"))));
+
+        fixture.server().verify();
+    }
+
 }

@@ -13,7 +13,6 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -37,8 +36,8 @@ public class DependencyAnalysisService {
     );
 
     private static final Pattern JS_IMPORT_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:import\\s+(?:[\\s\\S]*?\\s+from\\s+)?|"
-                    + "export\\s+[\\s\\S]*?\\s+from\\s+)"
+            "(?m)^\\s*(?:import\\s+(?:[\\s\\S]*?\\s+from\\s+)?"
+                    + "|export\\s+[\\s\\S]*?\\s+from\\s+)"
                     + "[\"']([^\"']+)[\"']"
     );
 
@@ -48,7 +47,7 @@ public class DependencyAnalysisService {
 
     private static final Pattern JAVA_IMPORT_PATTERN = Pattern.compile(
             "(?m)^\\s*import\\s+(static\\s+)?"
-                    + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+)"
+                    + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\.\\*|[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+)"
                     + "\\s*;"
     );
 
@@ -111,19 +110,28 @@ public class DependencyAnalysisService {
                 );
             }
 
+            // Source files and resolvable resources are indexed separately.
             Set<String> repositoryFiles = new LinkedHashSet<>();
+            Set<String> sourceFiles = new LinkedHashSet<>();
             List<Map<String, Object>> fileEntries = new ArrayList<>();
 
             for (Object item : tree) {
                 if (!(item instanceof Map<?, ?> entry)
                         || !"blob".equals(entry.get("type"))
                         || !(entry.get("path") instanceof String path)
-                        || !isSupportedSource(path)
                         || isExcludedPath(path)) {
                     continue;
                 }
 
-                repositoryFiles.add(path);
+                if (isResolvablePath(path)) {
+                    repositoryFiles.add(path);
+                }
+
+                if (!isSupportedSource(path)) {
+                    continue;
+                }
+
+                sourceFiles.add(path);
                 fileEntries.add(toFileEntry(entry, path));
             }
 
@@ -134,12 +142,15 @@ public class DependencyAnalysisService {
             List<String> analyzedFiles = new ArrayList<>();
             Map<String, String> analyzedSources = new LinkedHashMap<>();
 
+            // Qualified Java type name -> source file path.
             Map<String, String> javaTypes = new LinkedHashMap<>();
+
+            // Source file path -> declared Java package.
             Map<String, String> javaPackages = new LinkedHashMap<>();
 
             int skippedFiles = 0;
 
-            // Pass 1: fetch source files and build the Java type index.
+            // Pass 1: fetch source files and build the Java index.
             for (Map<String, Object> entry : fileEntries) {
                 if (analyzedSources.size() >= MAX_FILES) {
                     skippedFiles++;
@@ -182,19 +193,16 @@ public class DependencyAnalysisService {
                 analyzedFiles.add(path);
 
                 if (".java".equals(extensionOf(path))) {
-                    indexJavaTypes(
-                            path, source, javaPackages, javaTypes
-                    );
+                    indexJavaTypes(path, source, javaPackages, javaTypes);
                 }
             }
 
             List<Map<String, Object>> dependencies = new ArrayList<>();
             List<Map<String, Object>> unresolvedImports = new ArrayList<>();
 
-            // Pass 2: resolve dependencies after the Java index is complete.
+            // Pass 2: resolve imports after the Java index is complete.
             for (Map.Entry<String, String> sourceEntry
                     : analyzedSources.entrySet()) {
-
                 extractDependencies(
                         sourceEntry.getKey(),
                         sourceEntry.getValue(),
@@ -209,7 +217,7 @@ public class DependencyAnalysisService {
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("repository", metadata.get("full_name"));
             response.put("defaultBranch", branch);
-            response.put("sourceFileCount", repositoryFiles.size());
+            response.put("sourceFileCount", sourceFiles.size());
             response.put("analyzedFileCount", analyzedFiles.size());
             response.put("skippedFileCount", skippedFiles);
             response.put("truncated", Boolean.TRUE.equals(
@@ -250,11 +258,13 @@ public class DependencyAnalysisService {
                     HttpStatus.BAD_GATEWAY,
                     "GitHub source retrieval failed."
             );
+
         } catch (RestClientException ex) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
                     "Unable to connect to GitHub."
             );
+
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
@@ -311,60 +321,71 @@ public class DependencyAnalysisService {
             List<Map<String, Object>> unresolvedImports) {
 
         String extension = extensionOf(sourcePath);
-        Set<String> imports = new LinkedHashSet<>();
+        Set<ImportReference> imports = new LinkedHashSet<>();
 
         if (".java".equals(extension)) {
             Matcher matcher = JAVA_IMPORT_PATTERN.matcher(source);
 
             while (matcher.find()) {
                 String importPath = matcher.group(2);
+                String resolutionPath = importPath;
 
-                // For a static import, remove the member name first.
+                // Keep the original import for display, but resolve a static
+                // member import against its declaring type.
                 if (matcher.group(1) != null) {
-                    int lastDot = importPath.lastIndexOf('.');
+                    int lastDot = resolutionPath.lastIndexOf('.');
 
                     if (lastDot > 0) {
-                        importPath = importPath.substring(0, lastDot);
+                        resolutionPath = resolutionPath.substring(0, lastDot);
                     }
                 }
 
-                imports.add(importPath);
+                imports.add(new ImportReference(importPath, resolutionPath));
             }
         } else {
             Matcher importsMatcher = JS_IMPORT_PATTERN.matcher(source);
 
             while (importsMatcher.find()) {
-                imports.add(importsMatcher.group(1));
+                String importPath = importsMatcher.group(1);
+                imports.add(new ImportReference(importPath, importPath));
             }
 
             Matcher requireMatcher = JS_REQUIRE_PATTERN.matcher(source);
 
             while (requireMatcher.find()) {
-                imports.add(requireMatcher.group(1));
+                String importPath = requireMatcher.group(1);
+                imports.add(new ImportReference(importPath, importPath));
             }
         }
 
-        for (String importPath : imports) {
+        for (ImportReference reference : imports) {
+            String importPath = reference.importPath();
+
             if (".java".equals(extension)) {
-                String resolved = resolveJavaImport(
+                List<String> resolvedPaths = resolveJavaImport(
                         sourcePath,
-                        importPath,
+                        reference.resolutionPath(),
                         javaTypes,
                         javaPackages
                 );
 
-                Map<String, Object> dependency = new LinkedHashMap<>();
-                dependency.put("source", sourcePath);
-                dependency.put("import", importPath);
-
-                if (resolved != null) {
-                    dependency.put("target", resolved);
-                    dependency.put("kind", "internal");
+                if (resolvedPaths.isEmpty()) {
+                    addJavaDependency(
+                            sourcePath,
+                            importPath,
+                            null,
+                            dependencies
+                    );
                 } else {
-                    dependency.put("kind", "external");
+                    for (String resolvedPath : resolvedPaths) {
+                        addJavaDependency(
+                                sourcePath,
+                                importPath,
+                                resolvedPath,
+                                dependencies
+                        );
+                    }
                 }
-
-                dependencies.add(dependency);
 
             } else if (importPath.startsWith(".")) {
                 String resolved = resolveRelativeImport(
@@ -391,36 +412,73 @@ public class DependencyAnalysisService {
         }
     }
 
-    private String resolveJavaImport(
+    private record ImportReference(
+            String importPath,
+            String resolutionPath) {
+    }
+
+    private void addJavaDependency(
+            String sourcePath,
+            String importPath,
+            String resolvedPath,
+            List<Map<String, Object>> dependencies) {
+
+        Map<String, Object> dependency = new LinkedHashMap<>();
+        dependency.put("source", sourcePath);
+        dependency.put("import", importPath);
+
+        if (resolvedPath != null) {
+            dependency.put("target", resolvedPath);
+            dependency.put("kind", "internal");
+        } else {
+            // JDK and third-party imports are external unless they resolve
+            // to a source file present in this repository.
+            dependency.put("kind", "external");
+        }
+
+        dependencies.add(dependency);
+    }
+
+    private List<String> resolveJavaImport(
             String sourcePath,
             String importPath,
             Map<String, String> javaTypes,
             Map<String, String> javaPackages) {
 
-        // Resolve an exact fully qualified type.
-        String exactMatch = javaTypes.get(importPath);
-
-        if (exactMatch != null && !exactMatch.equals(sourcePath)) {
-            return exactMatch;
-        }
-
-        // A wildcard import refers to a package.
+        // A wildcard can refer to a package or to a type's nested types.
         if (importPath.endsWith(".*")) {
-            String packageName = importPath.substring(
+            String wildcardBase = importPath.substring(
                     0, importPath.length() - 2
             );
 
-            return javaPackages.entrySet().stream()
-                    .filter(entry -> packageName.equals(entry.getValue()))
+            // For example, Outer.* can refer to nested types declared
+            // inside Outer.java.
+            String enclosingType = javaTypes.get(wildcardBase);
+
+            if (enclosingType != null && !enclosingType.equals(sourcePath)) {
+                return List.of(enclosingType);
+            }
+
+            // A package wildcard can match multiple repository files.
+            List<String> packageMatches = javaPackages.entrySet().stream()
+                    .filter(entry -> wildcardBase.equals(entry.getValue()))
                     .map(Map.Entry::getKey)
                     .filter(path -> !path.equals(sourcePath))
                     .sorted()
-                    .findFirst()
-                    .orElse(null);
+                    .toList();
+
+            return packageMatches;
         }
 
-        // Support nested types by looking for the longest known
-        // enclosing type in the qualified import.
+        // Exact fully qualified type import.
+        String exactMatch = javaTypes.get(importPath);
+
+        if (exactMatch != null && !exactMatch.equals(sourcePath)) {
+            return List.of(exactMatch);
+        }
+
+        // Nested type imports such as com.acme.Outer.Inner resolve to
+        // the source file declaring the longest known enclosing type.
         String candidate = importPath;
 
         while (candidate.contains(".")) {
@@ -430,11 +488,11 @@ public class DependencyAnalysisService {
             String resolved = javaTypes.get(candidate);
 
             if (resolved != null && !resolved.equals(sourcePath)) {
-                return resolved;
+                return List.of(resolved);
             }
         }
 
-        return null;
+        return List.of();
     }
 
     private void addDependency(
@@ -452,9 +510,11 @@ public class DependencyAnalysisService {
             dependency.put("target", resolvedPath);
             dependency.put("kind", "internal");
             dependencies.add(dependency);
+
         } else if (!importPath.startsWith(".")) {
             dependency.put("kind", "external");
             dependencies.add(dependency);
+
         } else {
             Map<String, Object> unresolved = new LinkedHashMap<>();
             unresolved.put("source", source);
@@ -527,6 +587,13 @@ public class DependencyAnalysisService {
 
     private boolean isSupportedSource(String path) {
         return SOURCE_EXTENSIONS.contains(extensionOf(path));
+    }
+
+    private boolean isResolvablePath(String path) {
+        String extension = extensionOf(path);
+
+        return SOURCE_EXTENSIONS.contains(extension)
+                || RESOLUTION_EXTENSIONS.contains(extension);
     }
 
     private String extensionOf(String path) {
