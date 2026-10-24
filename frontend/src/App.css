@@ -1408,3 +1408,24 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* Fix filename visibility in the File and folder explorer only */
+.structure-tree > .structure-entry > code.structure-entry-path {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  color: #f1f3fb !important;
+  -webkit-text-fill-color: #f1f3fb !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

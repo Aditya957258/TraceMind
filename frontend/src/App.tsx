@@ -537,6 +537,56 @@ function getDateLabel(date: string): string {
   return new Date(date).toLocaleDateString();
 }
 
+type ImpactedFile = {
+  path: string;
+  depth: number;
+};
+
+function findImpactedFiles(
+  dependencies: Dependency[],
+  changedFile: string,
+): ImpactedFile[] {
+  const dependentsByTarget = new Map<string, Set<string>>();
+
+  for (const dependency of dependencies) {
+    if (dependency.kind !== "internal" || !dependency.target) {
+      continue;
+    }
+
+    const sources =
+      dependentsByTarget.get(dependency.target) ?? new Set<string>();
+
+    sources.add(dependency.source);
+    dependentsByTarget.set(dependency.target, sources);
+  }
+
+  const visited = new Set<string>([changedFile]);
+  const queue: ImpactedFile[] = [{ path: changedFile, depth: 0 }];
+  const impacted: ImpactedFile[] = [];
+
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head];
+
+    for (const dependent of dependentsByTarget.get(current.path) ?? []) {
+      if (visited.has(dependent)) {
+        continue;
+      }
+
+      visited.add(dependent);
+
+      const depth = current.depth + 1;
+      const impactedFile = { path: dependent, depth };
+
+      impacted.push(impactedFile);
+      queue.push(impactedFile);
+    }
+  }
+
+  return impacted.sort(
+    (a, b) => a.depth - b.depth || a.path.localeCompare(b.path),
+  );
+}
+
 function App() {
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthError, setHealthError] = useState("");
@@ -547,6 +597,7 @@ function App() {
 
   const [dependencyAnalysis, setDependencyAnalysis] =
     useState<DependencyAnalysisResult | null>(null);
+  const [selectedImpactFile, setSelectedImpactFile] = useState("");
   const [dependencyLoading, setDependencyLoading] = useState(false);
   const [dependencyError, setDependencyError] = useState("");
 
@@ -743,6 +794,7 @@ function App() {
       }
 
       setDependencyAnalysis(data);
+      setSelectedImpactFile(data.analyzedFiles[0] ?? "");
       setDependencyError("");
     } catch (err) {
       setDependencyError(
@@ -1085,6 +1137,21 @@ function App() {
     dependencyAnalysis?.dependencies.filter(
       (dependency) => dependency.kind === "external",
     ) ?? [];
+
+  const impactedFiles = selectedImpactFile
+    ? findImpactedFiles(
+        dependencyAnalysis?.dependencies ?? [],
+        selectedImpactFile,
+      )
+    : [];
+
+  const directImpactCount = impactedFiles.filter(
+    (file) => file.depth === 1,
+  ).length;
+
+  const transitiveImpactCount = impactedFiles.filter(
+    (file) => file.depth > 1,
+  ).length;
 
   return (
     <div className="app-shell">
@@ -1929,6 +1996,84 @@ function App() {
                       {dependencyAnalysis.unresolvedImportCount.toLocaleString()}
                     </strong>
                   </div>
+                </div>
+
+                <div className="language-section">
+                  <h4>Change impact analysis</h4>
+                  <p>
+                    Select a source file to find files that depend on it,
+                    directly or through other files. These are potential
+                    impacts, not guaranteed breakages.
+                  </p>
+
+                  <label htmlFor="impact-file-select">Changed file</label>
+                  <select
+                    id="impact-file-select"
+                    value={selectedImpactFile}
+                    onChange={(event) =>
+                      setSelectedImpactFile(event.target.value)
+                    }
+                    disabled={dependencyAnalysis.analyzedFiles.length === 0}
+                  >
+                    {dependencyAnalysis.analyzedFiles.map((file) => (
+                      <option key={file} value={file}>
+                        {file}
+                      </option>
+                    ))}
+                  </select>
+
+                  {dependencyAnalysis.analyzedFiles.length === 0 ? (
+                    <p>
+                      No source files were analyzed, so change impact cannot
+                      be calculated.
+                    </p>
+                  ) : selectedImpactFile ? (
+                    <>
+                      <div className="analysis-stats-grid">
+                        <div className="analysis-stat">
+                          <small>Direct dependents</small>
+                          <strong>{directImpactCount}</strong>
+                        </div>
+                        <div className="analysis-stat">
+                          <small>Transitive dependents</small>
+                          <strong>{transitiveImpactCount}</strong>
+                        </div>
+                      </div>
+
+                      {impactedFiles.length === 0 ? (
+                        <p>
+                          No dependents were found for this file in the
+                          resolved dependency graph.
+                        </p>
+                      ) : (
+                        <div className="structure-tree">
+                          {impactedFiles.map((file) => (
+                            <div className="structure-entry" key={file.path}>
+                              <span
+                                className="structure-entry-icon"
+                                aria-hidden="true"
+                              >
+                                {file.depth === 1 ? "↗" : "↳"}
+                              </span>
+
+                              <div className="structure-entry-path">
+                                <code>{file.path}</code>
+                                <small>
+                                  {file.depth === 1
+                                    ? "Direct dependent"
+                                    : `Transitive dependent · depth ${file.depth}`}
+                                </small>
+                              </div>
+
+                              <span className="structure-entry-type">
+                                {file.depth === 1 ? "Direct" : "Transitive"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : null}
                 </div>
 
                 {(dependencyAnalysis.skippedFileCount > 0 ||
