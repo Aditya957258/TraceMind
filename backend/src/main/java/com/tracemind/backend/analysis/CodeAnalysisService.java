@@ -23,6 +23,7 @@ public class CodeAnalysisService {
 
     private static final int MAX_FILES = 30;
     private static final int MAX_FILE_BYTES = 200_000;
+    private static final int LONG_FILE_LINE_THRESHOLD = 300;
 
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(
             ".java", ".js", ".jsx", ".ts", ".tsx",
@@ -212,6 +213,13 @@ public class CodeAnalysisService {
             List<Map<String, Object>> findings) {
 
         String[] lines = source.split("\\R", -1);
+
+        if (lines.length > LONG_FILE_LINE_THRESHOLD) {
+            addFinding(findings, path, LONG_FILE_LINE_THRESHOLD + 1, "LOW",
+                    "Long source file",
+                    "This file exceeds 300 lines and may be harder to navigate or maintain.",
+                    "Consider splitting responsibilities into smaller, cohesive classes or modules.");
+        }
 
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];

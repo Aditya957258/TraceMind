@@ -15,23 +15,36 @@ public class RiskScoringService {
     private static final int LOW_POINTS = 2;
     private static final int MAX_SCORE = 100;
 
+    private static final String LONG_FILE_RULE = "Long source file";
+
     public Map<String, Object> calculate(List<Map<String, Object>> findings) {
         int highCount = 0;
         int mediumCount = 0;
         int lowCount = 0;
 
-        for (Map<String, Object> finding : findings) {
-            Object value = finding.get("severity");
-            String severity = value instanceof String
-                    ? ((String) value).toUpperCase(Locale.ROOT)
-                    : "";
+        if (findings != null) {
+            for (Map<String, Object> finding : findings) {
+                if (finding == null) {
+                    continue;
+                }
 
-            switch (severity) {
-                case "HIGH" -> highCount++;
-                case "MEDIUM" -> mediumCount++;
-                case "LOW" -> lowCount++;
-                default -> {
-                    // Unknown severities do not contribute to the score.
+                // Maintainability advisories must not affect security risk.
+                if (LONG_FILE_RULE.equals(finding.get("rule"))) {
+                    continue;
+                }
+
+                Object value = finding.get("severity");
+                String severity = value instanceof String
+                        ? ((String) value).toUpperCase(Locale.ROOT)
+                        : "";
+
+                switch (severity) {
+                    case "HIGH" -> highCount++;
+                    case "MEDIUM" -> mediumCount++;
+                    case "LOW" -> lowCount++;
+                    default -> {
+                        // Unknown severities do not contribute to the score.
+                    }
                 }
             }
         }

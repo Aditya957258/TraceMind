@@ -124,4 +124,22 @@ class RiskScoringServiceTest {
         return findings;
     }
 
+
+    @Test
+    void longSourceFileFindingDoesNotIncreaseRiskScore() {
+        Map<String, Object> longFileFinding = finding("LOW");
+        longFileFinding.put("rule", "Long source file");
+
+        Map<String, Object> result = service.calculate(List.of(
+                finding("HIGH"),
+                longFileFinding
+        ));
+
+        assertEquals(10, result.get("riskScore"));
+        assertEquals("LOW", result.get("riskLevel"));
+        assertEquals(
+                Map.of("high", 1, "medium", 0, "low", 0),
+                result.get("severityCounts")
+        );
+    }
 }

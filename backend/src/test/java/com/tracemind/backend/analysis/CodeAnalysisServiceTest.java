@@ -169,6 +169,44 @@ class CodeAnalysisServiceTest {
     }
 
 
+
+    @Test
+    void doesNotFlagSourceFilesAtOrBelowThreeHundredLines() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile("src/Small.java", String.join("\n", java.util.Collections.nCopies(299, "class Small {}")), findings);
+        service.scanFile("src/Boundary.java", String.join("\n", java.util.Collections.nCopies(300, "class Boundary {}")), findings);
+
+        assertTrue(findings.isEmpty());
+    }
+
+    @Test
+    void flagsSourceFilesLongerThanThreeHundredLines() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile("src/Large.java", String.join("\n", java.util.Collections.nCopies(301, "int value = 1;")), findings);
+
+        assertEquals(1, findings.size());
+        assertEquals("Long source file", findings.get(0).get("rule"));
+        assertEquals("LOW", findings.get(0).get("severity"));
+        assertEquals(301, findings.get(0).get("line"));
+        assertTrue(
+                String.valueOf(findings.get(0).get("recommendation"))
+                        .contains("smaller")
+        );
+    }
+
+    @Test
+    void longSourceFileFindingIncludesTheFilePath() {
+        List<Map<String, Object>> findings = new ArrayList<>();
+
+        service.scanFile("src/services/VeryLarge.java",
+                String.join("\n", java.util.Collections.nCopies(301, "int value = 1;")), findings);
+
+        assertEquals(1, findings.size());
+        assertEquals("src/services/VeryLarge.java", findings.get(0).get("file"));
+    }
+
     private record ApiFixture(
             CodeAnalysisService service,
             MockRestServiceServer server) {}
