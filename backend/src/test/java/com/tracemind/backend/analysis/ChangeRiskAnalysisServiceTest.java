@@ -273,4 +273,53 @@ class ChangeRiskAnalysisServiceTest {
         fixture.server().verify();
     }
 
+    @Test
+    void flagsBuildAndCiWorkflowChangesAsMediumRisk() {
+        Fixture fixture = createFixture();
+
+        fixture.server().expect(requestTo(
+                        "https://api.github.com/repos/acme/demo/compare/main...feature"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "status": "ahead",
+                          "files": [
+                            {
+                              "filename": ".github/workflows/ci.yml",
+                              "status": "modified",
+                              "additions": 5,
+                              "deletions": 2,
+                              "changes": 7
+                            },
+                            {
+                              "filename": "build.gradle",
+                              "status": "modified",
+                              "additions": 3,
+                              "deletions": 1,
+                              "changes": 4
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo", "main", "feature");
+
+        assertEquals(2, result.get("findingCount"));
+
+        @SuppressWarnings("unchecked")
+        var findings =
+                (java.util.List<Map<String, Object>>) result.get("findings");
+
+        assertEquals("CI workflow changed", findings.get(0).get("rule"));
+        assertEquals("MEDIUM", findings.get(0).get("severity"));
+
+        assertEquals(
+                "Configuration or dependency file changed",
+                findings.get(1).get("rule"));
+        assertEquals("MEDIUM", findings.get(1).get("severity"));
+
+        fixture.server().verify();
+    }
+
 }

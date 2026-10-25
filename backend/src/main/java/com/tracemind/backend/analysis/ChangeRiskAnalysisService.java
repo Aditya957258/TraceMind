@@ -163,12 +163,22 @@ public class ChangeRiskAnalysisService {
             rule = "Security-sensitive file changed";
             explanation = "The changed path appears related to authentication, authorization, or security.";
             recommendation = "Review access-control behavior and add or run security-focused tests.";
+        } else if (lower.startsWith(".github/workflows/")
+                || lower.contains("/.github/workflows/")) {
+            severity = "MEDIUM";
+            rule = "CI workflow changed";
+            explanation = "Changes to CI workflows can alter build, test, or release automation.";
+            recommendation = "Review workflow permissions and commands, then run the affected CI pipeline.";
         } else if (lower.matches(".*(^|/)(application|application-[^/]+)\\.(properties|yml|yaml)$")
                 || lower.endsWith(".env")
                 || lower.endsWith(".env.example")
                 || lower.contains("dockerfile")
                 || lower.endsWith("pom.xml")
-                || lower.endsWith("package.json")) {
+                || lower.endsWith("package.json")
+                || lower.endsWith("build.gradle")
+                || lower.endsWith("build.gradle.kts")
+                || lower.endsWith("settings.gradle")
+                || lower.endsWith("settings.gradle.kts")) {
             severity = "MEDIUM";
             rule = "Configuration or dependency file changed";
             explanation = "Configuration or dependency changes can affect runtime behavior across the application.";
