@@ -159,4 +159,118 @@ class ChangeRiskAnalysisServiceTest {
 
         fixture.server().verify();
     }
+
+
+    @Test
+    void flagsRootConfigurationChangesAsMediumRisk() {
+        Fixture fixture = createFixture();
+
+        fixture.server().expect(requestTo(
+                        "https://api.github.com/repos/acme/demo/compare/main...feature"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "status": "ahead",
+                          "files": [
+                            {
+                              "filename": "application.yml",
+                              "status": "modified",
+                              "additions": 2,
+                              "deletions": 1,
+                              "changes": 3
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo", "main", "feature");
+
+        assertEquals(1, result.get("findingCount"));
+
+        @SuppressWarnings("unchecked")
+        var findings =
+                (java.util.List<Map<String, Object>>) result.get("findings");
+
+        assertEquals("Configuration or dependency file changed",
+                findings.get(0).get("rule"));
+        assertEquals("MEDIUM", findings.get(0).get("severity"));
+
+        fixture.server().verify();
+    }
+
+    @Test
+    void flagsRemovedFilesAsMediumRisk() {
+        Fixture fixture = createFixture();
+
+        fixture.server().expect(requestTo(
+                        "https://api.github.com/repos/acme/demo/compare/main...feature"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "status": "ahead",
+                          "files": [
+                            {
+                              "filename": "src/LegacyService.java",
+                              "status": "removed",
+                              "additions": 0,
+                              "deletions": 35,
+                              "changes": 35
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo", "main", "feature");
+
+        assertEquals(1, result.get("findingCount"));
+
+        @SuppressWarnings("unchecked")
+        var findings =
+                (java.util.List<Map<String, Object>>) result.get("findings");
+
+        assertEquals("File removed", findings.get(0).get("rule"));
+        assertEquals("MEDIUM", findings.get(0).get("severity"));
+
+        fixture.server().verify();
+    }
+
+    @Test
+    void flagsLargeChangesAsMediumRisk() {
+        Fixture fixture = createFixture();
+
+        fixture.server().expect(requestTo(
+                        "https://api.github.com/repos/acme/demo/compare/main...feature"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "status": "ahead",
+                          "files": [
+                            {
+                              "filename": "src/ReportService.java",
+                              "status": "modified",
+                              "additions": 180,
+                              "deletions": 120,
+                              "changes": 300
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo", "main", "feature");
+
+        assertEquals(1, result.get("findingCount"));
+
+        @SuppressWarnings("unchecked")
+        var findings =
+                (java.util.List<Map<String, Object>>) result.get("findings");
+
+        assertEquals("Large change", findings.get(0).get("rule"));
+        assertEquals("MEDIUM", findings.get(0).get("severity"));
+
+        fixture.server().verify();
+    }
+
 }
