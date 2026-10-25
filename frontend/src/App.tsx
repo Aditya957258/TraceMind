@@ -108,6 +108,39 @@ type CodeAnalysisResult = {
   note: string;
 };
 
+type ChangeRiskFinding = {
+  file: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  rule: string;
+  explanation: string;
+  recommendation: string;
+};
+
+type ChangedFile = {
+  file: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+};
+
+type ChangeRiskResult = {
+  repository: string;
+  base: string;
+  head: string;
+  comparisonStatus: string | null;
+  changedFileCount: number;
+  totalAdditions: number;
+  totalDeletions: number;
+  changedFiles: ChangedFile[];
+  findingCount: number;
+  riskScore: number;
+  riskLevel: string;
+  severityCounts: { high: number; medium: number; low: number };
+  findings: ChangeRiskFinding[];
+  note: string;
+};
+
 type ApiErrorResponse = {
   status?: number;
   error?: string;
@@ -290,6 +323,56 @@ function isCodeAnalysisResult(
     Array.isArray(value.findings) &&
     value.findings.every(isRiskFinding) &&
     isStringArray(value.analyzedFiles) &&
+    typeof value.note === "string"
+  );
+}
+
+function isChangeRiskFinding(value: unknown): value is ChangeRiskFinding {
+  return (
+    isRecord(value) &&
+    typeof value.file === "string" &&
+    (value.severity === "HIGH" ||
+      value.severity === "MEDIUM" ||
+      value.severity === "LOW") &&
+    typeof value.rule === "string" &&
+    typeof value.explanation === "string" &&
+    typeof value.recommendation === "string"
+  );
+}
+
+function isChangedFile(value: unknown): value is ChangedFile {
+  return (
+    isRecord(value) &&
+    typeof value.file === "string" &&
+    typeof value.status === "string" &&
+    isNonNegativeNumber(value.additions) &&
+    isNonNegativeNumber(value.deletions) &&
+    isNonNegativeNumber(value.changes)
+  );
+}
+
+function isChangeRiskResult(value: unknown): value is ChangeRiskResult {
+  return (
+    isRecord(value) &&
+    typeof value.repository === "string" &&
+    typeof value.base === "string" &&
+    typeof value.head === "string" &&
+    (typeof value.comparisonStatus === "string" ||
+      value.comparisonStatus === null) &&
+    isNonNegativeNumber(value.changedFileCount) &&
+    isNonNegativeNumber(value.totalAdditions) &&
+    isNonNegativeNumber(value.totalDeletions) &&
+    Array.isArray(value.changedFiles) &&
+    value.changedFiles.every(isChangedFile) &&
+    isNonNegativeNumber(value.findingCount) &&
+    isNonNegativeNumber(value.riskScore) &&
+    typeof value.riskLevel === "string" &&
+    isRecord(value.severityCounts) &&
+    isNonNegativeNumber(value.severityCounts.high) &&
+    isNonNegativeNumber(value.severityCounts.medium) &&
+    isNonNegativeNumber(value.severityCounts.low) &&
+    Array.isArray(value.findings) &&
+    value.findings.every(isChangeRiskFinding) &&
     typeof value.note === "string"
   );
 }
@@ -646,6 +729,12 @@ function App() {
   const [riskAnalysisLoading, setRiskAnalysisLoading] = useState(false);
   const [riskAnalysisError, setRiskAnalysisError] = useState("");
 
+  const [changeBase, setChangeBase] = useState("main");
+  const [changeHead, setChangeHead] = useState("");
+  const [changeRisk, setChangeRisk] = useState<ChangeRiskResult | null>(null);
+  const [changeRiskLoading, setChangeRiskLoading] = useState(false);
+  const [changeRiskError, setChangeRiskError] = useState("");
+
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
@@ -747,7 +836,14 @@ function App() {
     };
 
     void runHealthCheck();
-    void loadProjects();
+
+    const loadInitialProjects = () => {
+      if (active) {
+        void loadProjects();
+      }
+    };
+
+    queueMicrotask(loadInitialProjects);
 
     return () => {
       active = false;
@@ -904,6 +1000,66 @@ function App() {
       );
     } finally {
       setRiskAnalysisLoading(false);
+    }
+  }
+
+  async function handleChangeRiskAnalysis(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+    setChangeRiskError("");
+
+    const url = analysisUrl.trim();
+    const base = changeBase.trim();
+    const head = changeHead.trim();
+
+    if (!isValidGitHubRepositoryUrl(url)) {
+      setChangeRiskError("Enter a valid public GitHub repository URL first.");
+      return;
+    }
+
+    if (!base || !head) {
+      setChangeRiskError("Enter both a base reference and a head reference.");
+      return;
+    }
+
+    if (base === head) {
+      setChangeRiskError("Base and head must be different references.");
+      return;
+    }
+
+    let owner: string;
+    let repo: string;
+
+    try {
+      ({ owner, repo } = getGitHubOwnerAndRepo(url));
+    } catch {
+      setChangeRiskError("Invalid GitHub repository URL.");
+      return;
+    }
+
+    setChangeRiskLoading(true);
+
+    try {
+      const query = new URLSearchParams({ base, head });
+      const data = await apiRequest(
+        `/change-risk/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?${query.toString()}`,
+      );
+
+      if (!isChangeRiskResult(data)) {
+        throw new Error("The backend returned an unexpected change-risk response.");
+      }
+
+      setChangeRisk(data);
+      setChangeRiskError("");
+    } catch (err) {
+      setChangeRiskError(
+        err instanceof Error
+          ? err.message
+          : "Change-risk analysis failed. Please try again.",
+      );
+    } finally {
+      setChangeRiskLoading(false);
     }
   }
 
@@ -1217,6 +1373,9 @@ function App() {
             }}
           >
             <span>⑂</span> Dependency analysis
+          </a>
+          <a className="nav-item" href="#change-risk-analysis">
+            <span>⚑</span> Change risk analysis
           </a>
         </nav>
 
@@ -2214,6 +2373,183 @@ function App() {
                   </p>
                 </div>
               </article>
+            )}
+          </section>
+
+          <section
+            className="risk-analysis-section"
+            id="change-risk-analysis"
+            aria-labelledby="change-risk-title"
+          >
+            <div className="risk-analysis-heading">
+              <div>
+                <div className="eyebrow">PULL REQUEST INTELLIGENCE</div>
+                <h2 id="change-risk-title">Change risk analysis</h2>
+                <p>
+                  Compare two Git references to review changed files,
+                  change volume, and heuristic risk signals before merging.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="repository-form analysis-form"
+              onSubmit={handleChangeRiskAnalysis}
+              noValidate
+            >
+              <label htmlFor="change-base">Base reference</label>
+              <input
+                id="change-base"
+                value={changeBase}
+                onChange={(event) => setChangeBase(event.target.value)}
+                placeholder="main"
+                maxLength={200}
+                required
+                spellCheck={false}
+              />
+
+              <label htmlFor="change-head">Head reference</label>
+              <input
+                id="change-head"
+                value={changeHead}
+                onChange={(event) => setChangeHead(event.target.value)}
+                placeholder="feature-branch or commit SHA"
+                maxLength={200}
+                required
+                spellCheck={false}
+              />
+
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={changeRiskLoading || !analysisUrl.trim()}
+              >
+                {changeRiskLoading
+                  ? "Comparing references…"
+                  : "Assess change risk →"}
+              </button>
+            </form>
+
+            {!analysisUrl.trim() && (
+              <p className="risk-analysis-hint">
+                Enter a public GitHub repository URL in “Analyze a repository”
+                first.
+              </p>
+            )}
+
+            {changeRiskError && (
+              <div className="notice-error" role="alert">
+                {changeRiskError}
+              </div>
+            )}
+
+            {changeRisk && (
+              <div className="change-risk-results">
+                <div className="risk-result-meta">
+                  <span>{changeRisk.repository}</span>
+                  <span>
+                    {changeRisk.base} → {changeRisk.head}
+                  </span>
+                  <span>
+                    Comparison: {changeRisk.comparisonStatus ?? "Unknown"}
+                  </span>
+                </div>
+
+                <div className="risk-summary-grid">
+                  <div className="risk-summary-card">
+                    <span>Risk score · {changeRisk.riskLevel}</span>
+                    <strong>{changeRisk.riskScore}/100</strong>
+                  </div>
+                  <div className="risk-summary-card">
+                    <span>Files changed</span>
+                    <strong>{changeRisk.changedFileCount}</strong>
+                  </div>
+                  <div className="risk-summary-card">
+                    <span>Lines added / deleted</span>
+                    <strong>
+                      +{changeRisk.totalAdditions} / −{changeRisk.totalDeletions}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="risk-result-meta">
+                  <span>High: {changeRisk.severityCounts.high}</span>
+                  <span>Medium: {changeRisk.severityCounts.medium}</span>
+                  <span>Low: {changeRisk.severityCounts.low}</span>
+                  <span>Findings: {changeRisk.findingCount}</span>
+                </div>
+
+                <div className="language-section">
+                  <h4>Changed files</h4>
+                  {changeRisk.changedFiles.length === 0 ? (
+                    <p>No changed files were returned for this comparison.</p>
+                  ) : (
+                    <div className="structure-tree">
+                      {changeRisk.changedFiles.map((file, index) => (
+                        <div
+                          className="structure-entry"
+                          key={`${file.file}:${index}`}
+                        >
+                          <span className="structure-entry-icon" aria-hidden="true">
+                            {file.status === "added" ? "+" :
+                              file.status === "removed" ? "−" : "↔"}
+                          </span>
+                          <div className="structure-entry-path">
+                            <code>{file.file}</code>
+                            <small>
+                              {file.status} · +{file.additions} / −{file.deletions}
+                            </small>
+                          </div>
+                          <span className="structure-entry-type">
+                            {file.changes} changes
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="language-section">
+                  <h4>Risk findings</h4>
+                  {changeRisk.findings.length === 0 ? (
+                    <div className="empty-panel">
+                      <h3>No heuristic risk signals detected</h3>
+                      <p>
+                        This comparison did not match the current rules.
+                        It does not guarantee that the changes are safe.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="risk-findings-list">
+                      {changeRisk.findings.map((finding, index) => (
+                        <article
+                          className="risk-finding-card"
+                          key={`${finding.file}:${finding.rule}:${index}`}
+                        >
+                          <div className="risk-finding-top">
+                            <span
+                              className={`risk-severity severity-${finding.severity.toLowerCase()}`}
+                            >
+                              {finding.severity}
+                            </span>
+                            <span className="risk-finding-location">
+                              {finding.file}
+                            </span>
+                          </div>
+                          <h3>{finding.rule}</h3>
+                          <p>{finding.explanation}</p>
+                          <div className="risk-recommendation">
+                            <strong>Recommended action</strong>
+                            <p>{finding.recommendation}</p>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <p className="risk-analysis-disclaimer">{changeRisk.note}</p>
+              </div>
             )}
           </section>
 
