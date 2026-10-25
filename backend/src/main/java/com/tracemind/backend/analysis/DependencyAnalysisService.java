@@ -66,14 +66,24 @@ public class DependencyAnalysisService {
     public DependencyAnalysisService() {
         this(RestClient.builder());
     }
-
     DependencyAnalysisService(RestClient.Builder builder) {
-        this.github = builder
-                .baseUrl("https://api.github.com")
-                .defaultHeader("Accept", "application/vnd.github+json")
-                .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
-                .build();
+    RestClient.Builder configuredBuilder = builder
+            .baseUrl("https://api.github.com")
+            .defaultHeader("Accept", "application/vnd.github+json")
+            .defaultHeader("X-GitHub-Api-Version", "2022-11-28");
+
+    String githubToken = System.getenv("GITHUB_TOKEN");
+
+    if (githubToken != null && !githubToken.isBlank()) {
+        configuredBuilder.defaultHeader(
+                "Authorization",
+                "Bearer " + githubToken.trim()
+        );
     }
+
+    this.github = configuredBuilder.build();
+    }
+
 
     public Map<String, Object> analyze(String owner, String repo) {
         validateRepositoryName(owner, "owner");
