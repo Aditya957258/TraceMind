@@ -366,5 +366,107 @@ class DependencyAnalysisServiceTest {
 
         fixture.server().verify();
     }
+    @Test
+    void calculatesDirectAndTransitiveImpactForDependencyChain() {
+        Fixture fixture = createFixture();
+
+        expectJson(fixture.server(), "/repos/acme/demo", """
+                {
+                  "full_name": "acme/demo",
+                  "default_branch": "main"
+                }
+                """);
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/trees/main?recursive=1",
+                """
+                {
+                  "truncated": false,
+                  "tree": [
+                    {
+                      "path": "src/App.tsx",
+                      "type": "blob",
+                      "sha": "app-sha",
+                      "size": 100
+                    },
+                    {
+                      "path": "src/Service.ts",
+                      "type": "blob",
+                      "sha": "service-sha",
+                      "size": 100
+                    },
+                    {
+                      "path": "src/Repository.ts",
+                      "type": "blob",
+                      "sha": "repository-sha",
+                      "size": 100
+                    }
+                  ]
+                }
+                """
+        );
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/app-sha",
+                blobJson("""
+                        import { run } from "./Service";
+                        export const app = () => run();
+                        """)
+        );
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/repository-sha",
+                blobJson("""
+                        export const load = () => "data";
+                        """)
+        );
+
+        expectJson(
+                fixture.server(),
+                "/repos/acme/demo/git/blobs/service-sha",
+                blobJson("""
+                        import { load } from "./Repository";
+                        export const run = () => load();
+                        """)
+        );
+
+        Map<String, Object> result =
+                fixture.service().analyze("acme", "demo");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> impactAnalysis =
+                (Map<String, Object>) result.get("impactAnalysis");
+
+        assertTrue(impactAnalysis.containsKey("src/Repository.ts"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> repositoryImpact =
+                (Map<String, Object>) impactAnalysis.get("src/Repository.ts");
+
+        @SuppressWarnings("unchecked")
+        var directDependents =
+                (java.util.List<String>) repositoryImpact.get("directDependents");
+
+        @SuppressWarnings("unchecked")
+        var transitiveDependents =
+                (java.util.List<String>) repositoryImpact.get("transitiveDependents");
+
+        assertEquals(
+                java.util.List.of("src/Service.ts"),
+                directDependents
+        );
+
+        assertEquals(
+                java.util.List.of("src/App.tsx"),
+                transitiveDependents
+        );
+
+        assertEquals(2, repositoryImpact.get("impactCount"));
+
+        fixture.server().verify();
+    }
 
 }

@@ -47,7 +47,8 @@ public class DependencyAnalysisService {
 
     private static final Pattern JAVA_IMPORT_PATTERN = Pattern.compile(
             "(?m)^\\s*import\\s+(static\\s+)?"
-                    + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\.\\*|[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+)"
+                    + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\.\\*"
+                    + "|[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+)"
                     + "\\s*;"
     );
 
@@ -66,24 +67,24 @@ public class DependencyAnalysisService {
     public DependencyAnalysisService() {
         this(RestClient.builder());
     }
+
     DependencyAnalysisService(RestClient.Builder builder) {
-    RestClient.Builder configuredBuilder = builder
-            .baseUrl("https://api.github.com")
-            .defaultHeader("Accept", "application/vnd.github+json")
-            .defaultHeader("X-GitHub-Api-Version", "2022-11-28");
+        RestClient.Builder configuredBuilder = builder
+                .baseUrl("https://api.github.com")
+                .defaultHeader("Accept", "application/vnd.github+json")
+                .defaultHeader("X-GitHub-Api-Version", "2022-11-28");
 
-    String githubToken = System.getenv("GITHUB_TOKEN");
+        String githubToken = System.getenv("GITHUB_TOKEN");
 
-    if (githubToken != null && !githubToken.isBlank()) {
-        configuredBuilder.defaultHeader(
-                "Authorization",
-                "Bearer " + githubToken.trim()
-        );
+        if (githubToken != null && !githubToken.isBlank()) {
+            configuredBuilder.defaultHeader(
+                    "Authorization",
+                    "Bearer " + githubToken.trim()
+            );
+        }
+
+        this.github = configuredBuilder.build();
     }
-
-    this.github = configuredBuilder.build();
-    }
-
 
     public Map<String, Object> analyze(String owner, String repo) {
         validateRepositoryName(owner, "owner");
@@ -236,6 +237,13 @@ public class DependencyAnalysisService {
             response.put("unresolvedImportCount", unresolvedImports.size());
             response.put("analyzedFiles", analyzedFiles);
             response.put("dependencies", dependencies);
+
+            // New: identify files affected by a change to each analyzed file.
+            response.put(
+                    "impactAnalysis",
+                    calculateImpactAnalysis(analyzedFiles, dependencies)
+            );
+
             response.put("unresolvedImports", unresolvedImports);
             response.put(
                     "note",
@@ -281,6 +289,97 @@ public class DependencyAnalysisService {
                     "A source file could not be decoded."
             );
         }
+    }
+
+    /**
+     * Calculates direct and transitive source-file dependents.
+     *
+     * A dependency edge A -> B means A imports B. Therefore, changing B
+     * may affect A. The reverse graph makes this traversal efficient.
+     */
+    private Map<String, Object> calculateImpactAnalysis(
+            List<String> analyzedFiles,
+            List<Map<String, Object>> dependencies) {
+
+        Map<String, Set<String>> reverseGraph = new LinkedHashMap<>();
+
+        for (String file : analyzedFiles) {
+            reverseGraph.put(file, new LinkedHashSet<>());
+        }
+
+        for (Map<String, Object> dependency : dependencies) {
+            if (!"internal".equals(dependency.get("kind"))) {
+                continue;
+            }
+
+            Object sourceValue = dependency.get("source");
+            Object targetValue = dependency.get("target");
+
+            if (!(sourceValue instanceof String source)
+                    || !(targetValue instanceof String target)
+                    || !reverseGraph.containsKey(source)
+                    || !reverseGraph.containsKey(target)) {
+                continue;
+            }
+
+            // If source imports target, source depends on target.
+            reverseGraph.get(target).add(source);
+        }
+
+        Map<String, Object> impactAnalysis = new LinkedHashMap<>();
+
+        for (String changedFile : analyzedFiles) {
+            Set<String> visited = new LinkedHashSet<>();
+            List<String> directDependents = new ArrayList<>();
+            List<String> transitiveDependents = new ArrayList<>();
+            List<String> frontier = new ArrayList<>();
+
+            visited.add(changedFile);
+            frontier.add(changedFile);
+
+            boolean firstLevel = true;
+
+            while (!frontier.isEmpty()) {
+                List<String> nextLevel = new ArrayList<>();
+
+                for (String current : frontier) {
+                    for (String dependent :
+                            reverseGraph.getOrDefault(current, Set.of())) {
+
+                        if (!visited.add(dependent)) {
+                            continue;
+                        }
+
+                        nextLevel.add(dependent);
+
+                        if (firstLevel) {
+                            directDependents.add(dependent);
+                        } else {
+                            transitiveDependents.add(dependent);
+                        }
+                    }
+                }
+
+                frontier = nextLevel;
+                firstLevel = false;
+            }
+
+            // Stable output makes API responses and tests deterministic.
+            directDependents.sort(String::compareTo);
+            transitiveDependents.sort(String::compareTo);
+
+            Map<String, Object> fileImpact = new LinkedHashMap<>();
+            fileImpact.put("directDependents", directDependents);
+            fileImpact.put("transitiveDependents", transitiveDependents);
+            fileImpact.put(
+                    "impactCount",
+                    directDependents.size() + transitiveDependents.size()
+            );
+
+            impactAnalysis.put(changedFile, fileImpact);
+        }
+
+        return impactAnalysis;
     }
 
     private Map<String, Object> toFileEntry(
