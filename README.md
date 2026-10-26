@@ -3,6 +3,8 @@
 TraceMind is a full-stack developer tool designed to help developers understand software repositories, explore project structure, analyze dependencies, and assess the potential impact of code changes.
 
 The goal is to make complex codebases easier to navigate by turning repository information into useful, structured insights.
+**🚀 Live ** https://tracemind-frontend.onrender.com
+**Source Code:** https://github.com/Aditya957258/TraceMind
 
 > **Project status:** Active development. The application includes repository management, GitHub repository analysis, codebase structure exploration, dependency analysis, code-risk findings, and branch-comparison risk analysis. Advanced AI-powered insights remain a future enhancement.
 
