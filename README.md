@@ -4,25 +4,29 @@ TraceMind is a full-stack developer tool designed to help developers understand 
 
 The goal is to make complex codebases easier to navigate by turning repository information into useful, structured insights.
 
-> **Project status:** Active development. Repository management is implemented; automated repository analysis, dependency mapping, and AI-powered impact analysis are planned enhancements.
+> **Project status:** Active development. The application includes repository management, GitHub repository analysis, codebase structure exploration, dependency analysis, code-risk findings, and branch-comparison risk analysis. Advanced AI-powered insights remain a future enhancement.
 
 ## Key Features
 
 ### Implemented
-- **Repository Management:** Add and view GitHub repositories.
-- **Input Validation:** Validate repository names and GitHub HTTPS URLs.
-- **Duplicate Prevention:** Prevent adding the same repository URL twice through the frontend.
-- **REST API:** Create, retrieve, and delete saved repository records.
-- **Persistent Storage:** Store repository information in PostgreSQL.
-- **Error Handling:** Return structured validation errors from the backend.
-- **Health Check:** Check backend service availability.
+- **Repository Management:** Add, list, and delete saved GitHub repositories.
+- **Input Validation:** Validate repository data, GitHub URLs, and relevant API inputs.
+- **Duplicate Prevention:** Prevent duplicate repository URLs through the frontend.
+- **Persistent Storage:** Store repository records in PostgreSQL.
+- **REST API and Error Handling:** Expose backend endpoints with structured validation and error responses.
+- **Health Check:** Report backend service health.
+- **GitHub Repository Analysis:** Retrieve repository metadata and programming-language information.
+- **Codebase Exploration:** Inspect repository entries, top-level folders, important files, and detected technologies or areas.
+- **Dependency Analysis:** Analyze supported repository files for dependency information and potential component impact.
+- **Code Analysis:** Detect selected code patterns, including potential security concerns, and provide findings with file and line details where available.
+- **Risk Scoring:** Calculate a risk score and level from detected findings.
+- **Change-Risk Analysis:** Compare GitHub branches or references and classify selected security, CI, configuration, deletion, and large-change risks.
+- **Automated Testing:** Maintain backend regression tests and JaCoCo coverage reporting.
 
-### Planned
-- **Repository Analysis:** Retrieve repository metadata and identify programming languages.
-- **Codebase Exploration:** Display repository files and directory structure.
-- **Dependency Mapping:** Identify dependencies and relationships between project components.
-- **Change Impact Analysis:** Identify components that may be affected by code changes.
-- **AI-Powered Insights:** Generate understandable explanations of repository structure and potential change risks.
+### Planned Enhancements
+- **Advanced AI-Powered Insights:** Add AI-generated explanations beyond the current rule-based analysis.
+- **Deeper Impact Analysis:** Improve dependency relationships and identify affected components more comprehensively.
+- **Broader Analysis Coverage:** Expand supported languages, detection rules, and automated test coverage.
 
 ## Technology Stack
 
@@ -221,12 +225,14 @@ The directory structure above highlights the main application components; additi
 - [x] Implement repository creation, listing, and deletion APIs.
 - [x] Add request validation and structured error handling.
 - [x] Integrate repository management with the frontend.
-- [ ] Retrieve GitHub repository metadata.
-- [ ] Analyze repository files and programming languages.
-- [ ] Build dependency maps and component relationships.
-- [ ] Implement code change impact analysis.
-- [ ] Add AI-powered explanations and risk insights.
-- [ ] Expand automated testing and deployment.
+- [x] Retrieve GitHub repository metadata and language information.
+- [x] Explore repository files and directory structure.
+- [x] Implement dependency analysis and code-risk findings.
+- [x] Add risk scoring and branch-comparison risk analysis.
+- [x] Maintain backend regression tests and coverage reporting.
+- [ ] Improve dependency-based change-impact analysis.
+- [ ] Add advanced AI-generated explanations.
+- [ ] Continue expanding automated test coverage and deployment checks.
 
 ## Security and Configuration
 
